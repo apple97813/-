@@ -2,37 +2,37 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>情侶雲端記帳本</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>情侶雲端記帳本 - 實時同步版</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/11.0.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.0.1/firebase-auth-compat.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
-        body { font-family: 'Noto Sans TC', sans-serif; overflow-x: hidden; }
-        .animate-in { animation: slide-up 0.3s ease-out; }
-        @keyframes slide-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+        body { font-family: 'Noto Sans TC', sans-serif; -webkit-tap-highlight-color: transparent; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .active-tab { background-color: #0f172a; color: white; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); }
     </style>
 </head>
-<body class="bg-slate-50">
+<body class="bg-slate-50 text-slate-900">
     <div id="root"></div>
 
     <script type="text/babel">
         const { useState, useEffect, useMemo } = React;
-        // 模擬 Firebase 環境變數 (由 Preview 環境提供)
-        const firebaseConfig = JSON.parse(window.__firebase_config || '{}');
-        const appId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'ledger-pro-final';
 
-        // 從全域取得 lucide 圖示 (簡化版)
-        const Icons = {
-            Calendar: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>,
-            PieChart: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>,
-            Settings: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.72V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>,
-            Heart: (props) => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill={props.fill || "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>,
-            Plus: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" x2="12" y1="5" y2="19"/><line x1="5" x2="19" y1="12" y2="12"/></svg>,
-            Trash: () => <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
-        };
+        // Firebase 初始化 (使用注入的配置)
+        const firebaseConfig = JSON.parse(window.__firebase_config || '{}');
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        const db = firebase.firestore();
+        const auth = firebase.auth();
+        const appId = window.__app_id || 'our-ledger-v1';
 
         const DEFAULT_CATS = [
             { id: 'c1', name: '餐飲', icon: '🍲', color: '#fb923c' },
@@ -42,61 +42,104 @@
         ];
 
         function App() {
-            const [activeTab, setActiveTab] = useState('book');
-            const [roomName, setRoomName] = useState(localStorage.getItem('ledger_room') || '我們的家');
-            const [nickname, setNickname] = useState(localStorage.getItem('ledger_nick') || '另一半');
-            const [data, setData] = useState({ transactions: [], categories: DEFAULT_CATS, recurring: [] });
+            const [activeTab, setActiveTab] = useState('book'); // book, stats, settings
+            const [roomName, setRoomName] = useState(localStorage.getItem('ledger_room') || '我的小窩');
+            const [userName, setUserName] = useState(localStorage.getItem('ledger_user') || '用戶A');
+            const [filterUser, setFilterUser] = useState('all'); // all, 用戶A, 用戶B...
+            
+            const [dbData, setDbData] = useState({ 
+                transactions: [], 
+                categories: DEFAULT_CATS, 
+                recurring: [] 
+            });
+
             const [selectedDate, setSelectedDate] = useState(new Date());
             const [currentMonth, setCurrentMonth] = useState(new Date());
             const [showAdd, setShowAdd] = useState(false);
-            const [isIncome, setIsIncome] = useState(false);
+            const [loading, setLoading] = useState(true);
+
+            // 記帳表單狀態
             const [amt, setAmt] = useState('');
             const [note, setNote] = useState('');
             const [selCatId, setSelCatId] = useState('c1');
+            const [isIncome, setIsIncome] = useState(false);
+
+            // 固定收支表單狀態 (嵌入式)
+            const [recName, setRecName] = useState('');
+            const [recAmt, setRecAmt] = useState('');
+            const [recDay, setRecDay] = useState('1');
 
             const dateStr = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-            
-            // 載入資料 (因環境限制暫用 localStorage 模擬，建議部署後接回 Firebase)
+
+            // 1. 匿名登入與雲端監聽
             useEffect(() => {
-                const saved = localStorage.getItem(`ledger_data_${roomName}`);
-                if (saved) setData(JSON.parse(saved));
+                auth.signInAnonymously().then(() => {
+                    const docRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('rooms').doc(roomName);
+                    return docRef.onSnapshot(doc => {
+                        if (doc.exists) {
+                            setDbData(doc.data());
+                        } else {
+                            docRef.set({ transactions: [], categories: DEFAULT_CATS, recurring: [] });
+                        }
+                        setLoading(false);
+                    });
+                });
             }, [roomName]);
 
-            // 儲存資料
-            const persist = (newData) => {
-                setData(newData);
-                localStorage.setItem(`ledger_data_${roomName}`, JSON.stringify(newData));
+            // 取得當前房間內的所有用戶名
+            const userList = useMemo(() => {
+                const users = new Set(dbData.transactions.map(t => t.user));
+                users.add(userName);
+                return Array.from(users);
+            }, [dbData.transactions, userName]);
+
+            // 儲存至雲端
+            const updateCloud = async (newData) => {
+                const docRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('rooms').doc(roomName);
+                await docRef.update(newData);
             };
 
-            const saveEntry = () => {
+            const saveEntry = async () => {
                 if (!amt) return;
                 const newTx = {
                     id: Date.now().toString(),
                     amount: isIncome ? Math.abs(amt) : -Math.abs(amt),
-                    note: note || data.categories.find(c => c.id === selCatId).name,
+                    note: note || dbData.categories.find(c => c.id === selCatId)?.name || '未分類',
                     catId: selCatId,
-                    user: nickname,
-                    date: dateStr(selectedDate)
+                    user: userName,
+                    date: dateStr(selectedDate),
+                    timestamp: Date.now()
                 };
-                const newData = { ...data, transactions: [...data.transactions, newTx] };
-                persist(newData);
+                await updateCloud({
+                    transactions: firebase.firestore.FieldValue.arrayUnion(newTx)
+                });
                 setAmt(''); setNote(''); setShowAdd(false);
             };
 
-            const addRecurring = () => {
-                const name = prompt("名稱 (如: 房租)");
-                const amount = prompt("金額");
-                const day = prompt("幾號？");
-                if(!name || !amount || !day) return;
-                const newRec = { id: Date.now(), name, amount: -Math.abs(amount), day: parseInt(day), user: nickname };
-                persist({ ...data, recurring: [...(data.recurring || []), newRec] });
+            const addRecurring = async () => {
+                if (!recName || !recAmt) return;
+                const newRec = {
+                    id: Date.now().toString(),
+                    name: recName,
+                    amount: -Math.abs(recAmt), // 預設支出
+                    day: parseInt(recDay),
+                    user: userName
+                };
+                await updateCloud({
+                    recurring: firebase.firestore.FieldValue.arrayUnion(newRec)
+                });
+                setRecName(''); setRecAmt('');
             };
 
-            const currentDayTxs = useMemo(() => {
-                const normal = data.transactions.filter(t => t.date === dateStr(selectedDate));
-                const recur = (data.recurring || []).filter(r => r.day === selectedDate.getDate());
-                return [...normal, ...recur.map(r => ({ ...r, isRec: true }))];
-            }, [data, selectedDate]);
+            // 當日顯示邏輯 (包含過濾)
+            const displayTxs = useMemo(() => {
+                let list = dbData.transactions.filter(t => t.date === dateStr(selectedDate));
+                const recur = (dbData.recurring || []).filter(r => r.day === selectedDate.getDate());
+                const combined = [...list, ...recur.map(r => ({ ...r, isRec: true }))];
+                
+                if (filterUser === 'all') return combined;
+                return combined.filter(t => t.user === filterUser);
+            }, [dbData, selectedDate, filterUser]);
 
             const days = useMemo(() => {
                 const y = currentMonth.getFullYear(), m = currentMonth.getMonth();
@@ -108,17 +151,36 @@
                 return res;
             }, [currentMonth]);
 
+            if (loading) return <div className="h-screen flex items-center justify-center font-bold text-slate-400">同步雲端資料中...</div>;
+
             return (
-                <div className="max-w-md mx-auto min-h-screen pb-32">
-                    <header className="bg-white p-6 pt-12 rounded-b-[3rem] shadow-sm flex justify-between items-center sticky top-0 z-40">
-                        <div className="flex items-center gap-3">
-                            <div className="w-12 h-12 bg-rose-500 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-rose-100">
-                                <Icons.Heart fill="currentColor" />
+                <div className="max-w-md mx-auto min-h-screen pb-40">
+                    <header className="bg-white p-6 pt-12 rounded-b-[3rem] shadow-sm sticky top-0 z-40">
+                        <div className="flex justify-between items-center mb-6">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 bg-rose-500 rounded-xl flex items-center justify-center text-white shadow-lg shadow-rose-100">❤️</div>
+                                <h1 className="text-lg font-black">{roomName}</h1>
                             </div>
-                            <div>
-                                <h1 className="text-xl font-black text-slate-800">{roomName}</h1>
-                                <p className="text-[10px] text-emerald-500 font-bold tracking-widest uppercase">已同步雲端</p>
-                            </div>
+                            <div className="text-[10px] bg-emerald-100 text-emerald-600 px-3 py-1 rounded-full font-bold">LIVE SYNC</div>
+                        </div>
+
+                        {/* 用戶切換按鈕 */}
+                        <div className="flex gap-2 overflow-x-auto no-scrollbar pb-2">
+                            <button 
+                                onClick={() => setFilterUser('all')}
+                                className={`px-4 py-2 rounded-2xl text-xs font-bold whitespace-nowrap transition-all ${filterUser === 'all' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-400'}`}
+                            >
+                                全部紀錄
+                            </button>
+                            {userList.map(u => (
+                                <button 
+                                    key={u}
+                                    onClick={() => setFilterUser(u)}
+                                    className={`px-4 py-2 rounded-2xl text-xs font-bold whitespace-nowrap transition-all ${filterUser === u ? 'bg-rose-500 text-white' : 'bg-slate-100 text-slate-400'}`}
+                                >
+                                    {u === userName ? `我 (${u})` : u}
+                                </button>
+                            ))}
                         </div>
                     </header>
 
@@ -126,10 +188,10 @@
                         {activeTab === 'book' && (
                             <>
                                 <div className="bg-white p-6 rounded-[2.5rem] shadow-sm">
-                                    <div className="flex justify-between items-center mb-6 px-2 font-black">
-                                        <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth()-1))}>←</button>
+                                    <div className="flex justify-between items-center mb-6 font-black text-slate-700">
+                                        <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth()-1))}>‹</button>
                                         <span>{currentMonth.getFullYear()}年 {currentMonth.getMonth()+1}月</span>
-                                        <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth()+1))}>→</button>
+                                        <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth()+1))}>›</button>
                                     </div>
                                     <div className="grid grid-cols-7 gap-1 text-center text-[10px] text-slate-300 font-bold mb-2">
                                         {['日','一','二','三','四','五','六'].map(d => <div key={d}>{d}</div>)}
@@ -138,9 +200,9 @@
                                         {days.map((d, i) => {
                                             if (!d) return <div key={i} />;
                                             const isSel = dateStr(d) === dateStr(selectedDate);
-                                            const hasData = data.transactions.some(t => t.date === dateStr(d)) || data.recurring?.some(r => r.day === d.getDate());
+                                            const hasData = dbData.transactions.some(t => t.date === dateStr(d)) || dbData.recurring.some(r => r.day === d.getDate());
                                             return (
-                                                <button key={i} onClick={() => setSelectedDate(d)} className={`aspect-square rounded-2xl flex flex-col items-center justify-center text-sm font-bold relative ${isSel ? 'bg-slate-900 text-white shadow-xl' : 'text-slate-600'}`}>
+                                                <button key={i} onClick={() => setSelectedDate(d)} className={`aspect-square rounded-2xl flex flex-col items-center justify-center text-sm font-bold relative transition-all ${isSel ? 'bg-slate-900 text-white shadow-xl scale-110' : 'text-slate-600 hover:bg-slate-50'}`}>
                                                     {d.getDate()}
                                                     {hasData && !isSel && <div className="absolute bottom-1 w-1.5 h-1.5 bg-rose-500 rounded-full" />}
                                                 </button>
@@ -151,63 +213,125 @@
 
                                 <div className="space-y-3">
                                     <div className="flex justify-between items-center px-2">
-                                        <h2 className="text-[10px] font-black text-slate-400 tracking-widest">{dateStr(selectedDate)}</h2>
-                                        <button onClick={() => setShowAdd(true)} className="bg-rose-500 text-white p-4 rounded-2xl shadow-lg"><Icons.Plus /></button>
+                                        <h2 className="text-[10px] font-black text-slate-400 tracking-widest uppercase">{dateStr(selectedDate)}</h2>
+                                        <button onClick={() => setShowAdd(true)} className="bg-rose-500 text-white p-4 rounded-2xl shadow-xl active:scale-90 transition-transform">＋ 新增記帳</button>
                                     </div>
-                                    {currentDayTxs.map(t => (
-                                        <div key={t.id} className="bg-white p-5 rounded-[2rem] flex justify-between items-center shadow-sm">
-                                            <div className="flex items-center gap-4">
-                                                <div className="text-2xl">{t.isRec ? '🔄' : (data.categories.find(c => c.id === t.catId)?.icon || '💰')}</div>
-                                                <div>
-                                                    <p className="font-black text-slate-800 text-sm">{t.note || t.name}</p>
-                                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">由 {t.user} 記錄 {t.isRec && '| 固定收支'}</p>
+                                    {displayTxs.length === 0 ? (
+                                        <div className="py-12 text-center text-slate-300 font-bold text-xs italic">無紀錄</div>
+                                    ) : (
+                                        displayTxs.map(t => (
+                                            <div key={t.id} className="bg-white p-5 rounded-[2rem] flex justify-between items-center shadow-sm">
+                                                <div className="flex items-center gap-4">
+                                                    <div className="text-2xl w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center">
+                                                        {t.isRec ? '🔄' : (dbData.categories.find(c => c.id === t.catId)?.icon || '💰')}
+                                                    </div>
+                                                    <div>
+                                                        <p className="font-black text-slate-800 text-sm">{t.note || t.name}</p>
+                                                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">由 {t.user} 記錄 {t.isRec && '| 固定'}</p>
+                                                    </div>
+                                                </div>
+                                                <div className="text-right">
+                                                    <p className={`font-black text-lg ${t.amount > 0 ? 'text-emerald-500' : 'text-slate-900'}`}>
+                                                        {t.amount > 0 ? `+$${t.amount}` : `-$${Math.abs(t.amount)}`}
+                                                    </p>
+                                                    {!t.isRec && <button onClick={async () => {
+                                                        const docRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('rooms').doc(roomName);
+                                                        await docRef.update({ transactions: dbData.transactions.filter(tx => tx.id !== t.id) });
+                                                    }} className="text-[9px] text-rose-300 font-bold">刪除</button>}
                                                 </div>
                                             </div>
-                                            <p className={`font-black text-lg ${t.amount > 0 ? 'text-emerald-500' : 'text-slate-900'}`}>
-                                                {t.amount > 0 ? `+$${t.amount}` : `-$${Math.abs(t.amount)}`}
-                                            </p>
-                                        </div>
-                                    ))}
+                                        ))
+                                    )}
                                 </div>
                             </>
                         )}
 
                         {activeTab === 'settings' && (
-                            <div className="space-y-4">
+                            <div className="space-y-6">
+                                {/* 個人資料 */}
                                 <div className="bg-white p-8 rounded-[3rem] shadow-sm space-y-6">
-                                    <h3 className="font-black">基本設定</h3>
-                                    <input value={nickname} onChange={e => {setNickname(e.target.value); localStorage.setItem('ledger_nick', e.target.value);}} placeholder="你的暱稱" className="w-full p-4 bg-slate-50 rounded-2xl font-bold outline-none" />
-                                    <input value={roomName} onChange={e => setRoomName(e.target.value)} placeholder="房間名稱" className="w-full p-4 bg-slate-50 rounded-2xl font-bold outline-none" />
-                                </div>
-                                <div className="bg-white p-8 rounded-[3rem] shadow-sm space-y-4">
-                                    <div className="flex justify-between items-center">
-                                        <h3 className="font-black">每月固定收支</h3>
-                                        <button onClick={addRecurring} className="bg-slate-900 text-white p-2 rounded-xl"><Icons.Plus /></button>
+                                    <h3 className="font-black text-slate-800">房間與用戶設定</h3>
+                                    <div>
+                                        <label className="text-[10px] font-black text-slate-400 ml-2">我的暱稱 (區分記帳者)</label>
+                                        <input value={userName} onChange={e => {setUserName(e.target.value); localStorage.setItem('ledger_user', e.target.value);}} className="w-full p-4 bg-slate-50 rounded-2xl font-bold mt-1 outline-none" />
                                     </div>
-                                    {data.recurring?.map(r => (
-                                        <div key={r.id} className="flex justify-between p-4 bg-slate-50 rounded-2xl">
-                                            <span className="font-bold text-sm">{r.name} (每月{r.day}號)</span>
-                                            <span className="font-black">${Math.abs(r.amount)}</span>
-                                        </div>
-                                    ))}
+                                    <div>
+                                        <label className="text-[10px] font-black text-slate-400 ml-2">房間名稱 (另一支手機輸入一樣的即可同步)</label>
+                                        <input value={roomName} onChange={e => setRoomName(e.target.value)} className="w-full p-4 bg-slate-50 rounded-2xl font-bold mt-1 outline-none border-2 border-rose-100 focus:border-rose-500 transition-all" />
+                                    </div>
+                                </div>
+
+                                {/* 每月固定收支 - 嵌入式表單 */}
+                                <div className="bg-white p-8 rounded-[3rem] shadow-sm space-y-6">
+                                    <h3 className="font-black text-slate-800">新增每月固定支出</h3>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <input value={recName} onChange={e => setRecName(e.target.value)} placeholder="項目(如:房租)" className="p-4 bg-slate-50 rounded-2xl font-bold text-sm outline-none" />
+                                        <input type="number" value={recAmt} onChange={e => setRecAmt(e.target.value)} placeholder="金額" className="p-4 bg-slate-50 rounded-2xl font-bold text-sm outline-none" />
+                                    </div>
+                                    <div className="flex gap-2 items-center">
+                                        <span className="text-xs font-bold text-slate-400 whitespace-nowrap">每月幾號？</span>
+                                        <input type="number" min="1" max="31" value={recDay} onChange={e => setRecDay(e.target.value)} className="w-full p-4 bg-slate-50 rounded-2xl font-bold outline-none" />
+                                        <button onClick={addRecurring} className="bg-slate-900 text-white px-6 py-4 rounded-2xl font-black text-sm">新增</button>
+                                    </div>
+                                    <div className="space-y-2 pt-4">
+                                        {dbData.recurring?.map(r => (
+                                            <div key={r.id} className="flex justify-between items-center p-4 bg-slate-50 rounded-2xl">
+                                                <span className="font-bold text-xs">{r.name} (每月{r.day}號) - ${Math.abs(r.amount)}</span>
+                                                <button onClick={async () => {
+                                                    const docRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('rooms').doc(roomName);
+                                                    await docRef.update({ recurring: dbData.recurring.filter(rec => rec.id !== r.id) });
+                                                }} className="text-rose-400 font-bold text-xs">刪除</button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* 自定義分類管理 */}
+                                <div className="bg-white p-8 rounded-[3rem] shadow-sm space-y-6">
+                                    <h3 className="font-black text-slate-800">管理自定義分類</h3>
+                                    <div className="grid grid-cols-2 gap-4 mb-4">
+                                        {dbData.categories.map(c => (
+                                            <div key={c.id} className="flex justify-between items-center p-3 bg-slate-50 rounded-2xl">
+                                                <span className="text-sm font-bold">{c.icon} {c.name}</span>
+                                                <button onClick={async () => {
+                                                    await updateCloud({ categories: dbData.categories.filter(cat => cat.id !== c.id) });
+                                                }} className="text-rose-300">×</button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <button onClick={async () => {
+                                        const name = prompt("分類名稱？");
+                                        const icon = prompt("Emoji 圖示？");
+                                        if(name && icon) {
+                                            await updateCloud({ 
+                                                categories: [...dbData.categories, { id: 'c'+Date.now(), name, icon, color: '#94a3b8' }] 
+                                            });
+                                        }
+                                    }} className="w-full py-4 border-2 border-dashed border-slate-200 rounded-2xl text-slate-400 font-bold text-xs">＋ 增加新分類</button>
                                 </div>
                             </div>
                         )}
                     </main>
 
+                    {/* 導覽列 */}
                     <nav className="fixed bottom-10 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur-xl p-2 rounded-full flex gap-1 shadow-2xl z-50 border border-white">
                         {[
-                            { id: 'book', icon: Icons.Calendar, label: '記帳' },
-                            { id: 'stats', icon: Icons.PieChart, label: '分析' },
-                            { id: 'settings', icon: Icons.Settings, label: '設定' }
+                            { id: 'book', label: '記帳', icon: '📅' },
+                            { id: 'stats', label: '分析', icon: '📊' },
+                            { id: 'settings', label: '設定', icon: '⚙️' }
                         ].map(tab => (
-                            <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex items-center gap-2 px-6 py-4 rounded-full transition-all duration-500 ${activeTab === tab.id ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-400'}`}>
-                                <tab.icon />
+                            <button 
+                                key={tab.id} 
+                                onClick={() => setActiveTab(tab.id)} 
+                                className={`flex items-center gap-2 px-6 py-4 rounded-full transition-all duration-500 ${activeTab === tab.id ? 'active-tab' : 'text-slate-400'}`}
+                            >
+                                <span>{tab.icon}</span>
                                 {activeTab === tab.id && <span className="text-xs font-black">{tab.label}</span>}
                             </button>
                         ))}
                     </nav>
 
+                    {/* 記帳彈窗 */}
                     {showAdd && (
                         <div className="fixed inset-0 z-[100] flex items-end justify-center p-4">
                             <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-md" onClick={() => setShowAdd(false)} />
@@ -218,13 +342,14 @@
                                         <button onClick={() => setIsIncome(true)} className={`px-6 py-2 rounded-xl text-xs font-black ${isIncome ? 'bg-white text-emerald-500 shadow-sm' : 'text-slate-400'}`}>收入</button>
                                     </div>
                                 </div>
-                                <input type="number" value={amt} onChange={e => setAmt(e.target.value)} placeholder="0" className="w-full text-6xl font-black text-center outline-none mb-8" />
+                                <input type="number" autoFocus value={amt} onChange={e => setAmt(e.target.value)} placeholder="0" className="w-full text-6xl font-black text-center outline-none mb-8" />
                                 <div className="grid grid-cols-4 gap-3 mb-8">
-                                    {data.categories.map(c => (
-                                        <button key={c.id} onClick={() => setSelCatId(c.id)} className={`aspect-square rounded-2xl text-2xl flex items-center justify-center ${selCatId === c.id ? 'bg-slate-900 shadow-xl scale-110' : 'bg-slate-50'}`}>{c.icon}</button>
+                                    {dbData.categories.map(c => (
+                                        <button key={c.id} onClick={() => setSelCatId(c.id)} className={`aspect-square rounded-2xl text-2xl flex items-center justify-center transition-all ${selCatId === c.id ? 'bg-slate-900 shadow-xl scale-110' : 'bg-slate-50'}`}>{c.icon}</button>
                                     ))}
                                 </div>
-                                <button onClick={saveEntry} className="w-full py-6 bg-slate-900 text-white rounded-[2rem] font-black shadow-xl">確認儲存</button>
+                                <input value={note} onChange={e => setNote(e.target.value)} placeholder="備註..." className="w-full p-4 bg-slate-50 rounded-2xl font-bold mb-6 outline-none" />
+                                <button onClick={saveEntry} className="w-full py-6 bg-slate-900 text-white rounded-[2rem] font-black shadow-xl active:scale-95">確認儲存</button>
                             </div>
                         </div>
                     )}
