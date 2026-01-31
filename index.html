@@ -2,64 +2,221 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>我們的記帳本</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>我們的雲端記帳本</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
     <style>
-        body { background-color: #0f172a; color: white; font-family: sans-serif; }
-        .card { background-color: #1e293b; border-radius: 1rem; padding: 1.5rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
+        body { font-family: 'Noto Sans TC', sans-serif; -webkit-tap-highlight-color: transparent; }
+        .active-tab { background-color: #0f172a !important; color: #ffffff !important; }
+        .inactive-tab { color: #94a3b8 !important; }
+        .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+        @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        .animate-up { animation: slideUp 0.3s ease-out forwards; }
     </style>
 </head>
-<body class="p-4">
-    <div class="max-w-md mx-auto">
-        <header class="mb-8 text-center">
-            <h1 class="text-3xl font-bold text-blue-400">記帳本測試頁</h1>
-            <p class="text-gray-400 mt-2">如果您看到這個畫面，代表網站已成功運作！</p>
-        </header>
+<body class="bg-slate-50 text-slate-900">
+    <div id="root"></div>
 
-        <div class="card mb-6">
-            <h2 class="text-xl mb-4 font-semibold">新增紀錄</h2>
-            <div class="space-y-4">
-                <input type="text" id="item" placeholder="項目名稱 (例如: 午餐)" class="w-full p-3 rounded bg-slate-700 border-none text-white focus:ring-2 focus:ring-blue-500">
-                <input type="number" id="amount" placeholder="金額" class="w-full p-3 rounded bg-slate-700 border-none text-white focus:ring-2 focus:ring-blue-500">
-                <button onclick="addEntry()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded transition">
-                    儲存紀錄
-                </button>
-            </div>
-        </div>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, doc, onSnapshot, setDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import React, { useState, useEffect, useMemo } from 'https://esm.sh/react@18.2.0';
+        import ReactDOM from 'https://esm.sh/react-dom@18.2.0/client';
 
-        <div class="card">
-            <h2 class="text-xl mb-4 font-semibold">最近紀錄</h2>
-            <ul id="list" class="space-y-2">
-                <li class="text-gray-500 text-center py-4">目前尚無紀錄</li>
-            </ul>
-        </div>
-    </div>
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const DB_KEY = "STABLE_LEDGER_V5"; 
 
-    <script>
-        // 簡單的資料處理邏輯
-        function addEntry() {
-            const item = document.getElementById('item').value;
-            const amount = document.getElementById('amount').value;
-            
-            if (!item || !amount) {
-                alert('請填寫完整資訊');
-                return;
-            }
+        const DEFAULT_CATEGORIES = [
+            { id: 'c1', name: '餐飲', icon: '🍲', color: 'bg-orange-400' },
+            { id: 'c2', name: '交通', icon: '🚗', color: 'bg-blue-400' },
+            { id: 'c3', name: '居家', icon: '🏠', color: 'bg-emerald-400' },
+            { id: 'c4', name: '娛樂', icon: '🎮', color: 'bg-purple-400' },
+            { id: 'c5', name: '購物', icon: '🛍️', color: 'bg-rose-400' }
+        ];
 
-            const list = document.getElementById('list');
-            if (list.innerText === '目前尚無紀錄') list.innerHTML = '';
+        function App() {
+            const [user, setUser] = useState(null);
+            const [activeTab, setActiveTab] = useState('calendar');
+            const [roomId, setRoomId] = useState(new URLSearchParams(window.location.search).get('room') || '我們的家');
+            const [nickname, setNickname] = useState(localStorage.getItem('ledger_nick') || '另一半');
+            const [roomData, setRoomData] = useState({ transactions: [], categories: DEFAULT_CATEGORIES, fixedExpenses: [] });
+            const [selectedDate, setSelectedDate] = useState(new Date());
+            const [currentMonth, setCurrentMonth] = useState(new Date());
+            const [showAdd, setShowAdd] = useState(false);
+            const [selCat, setSelCat] = useState('c1');
 
-            const li = document.createElement('li');
-            li.className = 'flex justify-between p-3 bg-slate-800 rounded';
-            li.innerHTML = `<span>${item}</span><span class="text-green-400">$${amount}</span>`;
-            
-            list.prepend(li);
+            useEffect(() => {
+                signInAnonymously(auth);
+                return onAuthStateChanged(auth, setUser);
+            }, []);
 
-            // 清空輸入框
-            document.getElementById('item').value = '';
-            document.getElementById('amount').value = '';
+            useEffect(() => {
+                if (!user || !roomId) return;
+                const url = new URL(window.location);
+                url.searchParams.set('room', roomId);
+                window.history.replaceState({}, '', url);
+
+                const roomRef = doc(db, 'artifacts', DB_KEY, 'public', 'data', 'rooms', roomId);
+                return onSnapshot(roomRef, (snap) => {
+                    if (snap.exists()) setRoomData(snap.data());
+                    else setDoc(roomRef, { transactions: [], categories: DEFAULT_CATEGORIES, fixedExpenses: [] });
+                });
+            }, [user, roomId]);
+
+            const formatDate = (date) => {
+                const d = new Date(date);
+                return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            };
+
+            const calendarDays = useMemo(() => {
+                const y = currentMonth.getFullYear();
+                const m = currentMonth.getMonth();
+                const first = new Date(y, m, 1).getDay();
+                const total = new Date(y, m + 1, 0).getDate();
+                const days = [];
+                for (let i = 0; i < first; i++) days.push(null);
+                for (let i = 1; i <= total; i++) days.push(new Date(y, m, i));
+                return days;
+            }, [currentMonth]);
+
+            const dayTxs = (roomData.transactions || []).filter(t => t.dateKey === formatDate(selectedDate));
+            const monthTotal = (roomData.transactions || [])
+                .filter(t => t.dateKey.startsWith(`${currentMonth.getFullYear()}-${String(currentMonth.getMonth() + 1).padStart(2, '0')}`))
+                .reduce((s, t) => s + t.amount, 0);
+
+            const handleAdd = async (e) => {
+                e.preventDefault();
+                const amt = e.target.amount.value;
+                if (!amt) return;
+                const newTx = {
+                    id: Date.now().toString(),
+                    user: nickname,
+                    amount: parseFloat(amt),
+                    categoryId: selCat,
+                    note: e.target.note.value || roomData.categories.find(c => c.id === selCat).name,
+                    dateKey: formatDate(selectedDate),
+                    at: Date.now()
+                };
+                const roomRef = doc(db, 'artifacts', DB_KEY, 'public', 'data', 'rooms', roomId);
+                await updateDoc(roomRef, { transactions: [newTx, ...(roomData.transactions || [])] });
+                setShowAdd(false);
+            };
+
+            return React.createElement('div', { className: "max-w-md mx-auto min-h-screen pb-24" },
+                // Header
+                React.createElement('header', { className: "bg-white p-6 pt-12 rounded-b-[2.5rem] shadow-sm flex justify-between items-center sticky top-0 z-40" },
+                    React.createElement('div', { className: "flex items-center gap-3" },
+                        React.createElement('div', { className: "w-10 h-10 bg-rose-500 rounded-xl flex items-center justify-center text-white shadow-lg shadow-rose-100" }, 
+                            React.createElement('i', { 'data-lucide': 'heart', fill: 'white', size: 20 })
+                        ),
+                        React.createElement('div', null,
+                            React.createElement('h1', { className: "text-base font-black" }, roomId),
+                            React.createElement('p', { className: "text-[10px] text-emerald-500 font-bold" }, "● 雲端連線中")
+                        )
+                    ),
+                    React.createElement('button', { 
+                        onClick: () => { navigator.clipboard.writeText(window.location.href); alert("連結已複製！"); },
+                        className: "p-3 bg-slate-900 text-white rounded-2xl" 
+                    }, React.createElement('i', { 'data-lucide': 'share-2', size: 18 }))
+                ),
+
+                // Main Content
+                React.createElement('main', { className: "p-4" },
+                    activeTab === 'calendar' && React.createElement('div', { className: "animate-up" },
+                        React.createElement('div', { className: "bg-white p-5 rounded-[2.5rem] shadow-sm mb-6" },
+                            React.createElement('div', { className: "flex justify-between items-center mb-6" },
+                                React.createElement('button', { onClick: () => setCurrentMonth(new Date(currentMonth.setMonth(currentMonth.getMonth()-1))) }, React.createElement('i', { 'data-lucide': 'chevron-left' })),
+                                React.createElement('span', { className: "font-black" }, `${currentMonth.getFullYear()}年 ${currentMonth.getMonth()+1}月`),
+                                React.createElement('button', { onClick: () => setCurrentMonth(new Date(currentMonth.setMonth(currentMonth.getMonth()+1))) }, React.createElement('i', { 'data-lucide': 'chevron-right' }))
+                            ),
+                            React.createElement('div', { className: "calendar-grid mb-2" }, ['日','一','二','三','四','五','六'].map(d => React.createElement('div', { key: d, className: "text-center text-[10px] font-black text-slate-300" }, d))),
+                            React.createElement('div', { className: "calendar-grid" },
+                                calendarDays.map((date, i) => {
+                                    if (!date) return React.createElement('div', { key: i });
+                                    const isSel = formatDate(date) === formatDate(selectedDate);
+                                    const hasData = (roomData.transactions || []).some(t => t.dateKey === formatDate(date));
+                                    return React.createElement('button', {
+                                        key: i, onClick: () => setSelectedDate(date),
+                                        className: `aspect-square rounded-2xl flex items-center justify-center text-sm font-bold relative ${isSel ? 'bg-slate-900 text-white' : 'hover:bg-slate-50'}`
+                                    }, date.getDate(), hasData && !isSel && React.createElement('div', { className: "absolute bottom-1 w-1 h-1 bg-rose-400 rounded-full" }));
+                                })
+                            )
+                        ),
+                        React.createElement('div', { className: "flex justify-between items-center mb-4 px-2" },
+                            React.createElement('span', { className: "text-[10px] font-black text-slate-400 uppercase tracking-widest" }, formatDate(selectedDate)),
+                            React.createElement('button', { onClick: () => setShowAdd(true), className: "bg-rose-500 text-white p-4 rounded-2xl shadow-xl shadow-rose-100" }, React.createElement('i', { 'data-lucide': 'plus' }))
+                        ),
+                        dayTxs.length === 0 ? React.createElement('div', { className: "py-12 text-center text-slate-300 text-xs font-bold" }, "今天還沒記帳喔 ☕") :
+                        dayTxs.map(t => {
+                            const cat = roomData.categories.find(c => c.id === t.categoryId) || DEFAULT_CATEGORIES[0];
+                            return React.createElement('div', { key: t.id, className: "bg-white p-4 rounded-3xl flex justify-between items-center mb-3 shadow-sm" },
+                                React.createElement('div', { className: "flex items-center gap-3" },
+                                    React.createElement('div', { className: `w-10 h-10 ${cat.color} bg-opacity-10 text-xl rounded-xl flex items-center justify-center` }, cat.icon),
+                                    React.createElement('div', null, React.createElement('p', { className: "font-black text-sm" }, t.note), React.createElement('p', { className: "text-[9px] text-slate-400" }, t.user))
+                                ),
+                                React.createElement('p', { className: "font-black text-lg" }, `$${t.amount}`)
+                            );
+                        })
+                    ),
+                    activeTab === 'stats' && React.createElement('div', { className: "animate-up bg-white p-8 rounded-[2.5rem] shadow-sm text-center" },
+                        React.createElement('p', { className: "text-[10px] font-black text-slate-400 mb-2" }, "本月累計支出"),
+                        React.createElement('p', { className: "text-4xl font-black mb-8" }, `$${monthTotal.toLocaleString()}`),
+                        React.createElement('div', { className: "space-y-4" },
+                            roomData.categories.map(cat => {
+                                const total = (roomData.transactions || []).filter(t => t.categoryId === cat.id && t.dateKey.startsWith(`${currentMonth.getFullYear()}-${String(currentMonth.getMonth() + 1).padStart(2, '0')}`)).reduce((s,t)=>s+t.amount,0);
+                                if (total === 0) return null;
+                                return React.createElement('div', { key: cat.id },
+                                    React.createElement('div', { className: "flex justify-between text-xs font-bold mb-1" }, React.createElement('span', null, `${cat.icon} ${cat.name}`), React.createElement('span', null, `$${total}`)),
+                                    React.createElement('div', { className: "h-2 bg-slate-50 rounded-full overflow-hidden" }, React.createElement('div', { className: `${cat.color} h-full`, style: { width: `${(total/monthTotal)*100}%` } }))
+                                );
+                            })
+                        )
+                    ),
+                    activeTab === 'settings' && React.createElement('div', { className: "animate-up space-y-4" },
+                        React.createElement('div', { className: "bg-white p-6 rounded-[2.5rem] shadow-sm space-y-4" },
+                            React.createElement('div', null, React.createElement('label', { className: "text-[10px] font-black text-slate-400 px-2" }, "我的暱稱"), React.createElement('input', { value: nickname, onChange: e => { setNickname(e.target.value); localStorage.setItem('ledger_nick', e.target.value); }, className: "w-full p-4 bg-slate-50 rounded-2xl font-black mt-1 outline-none" })),
+                            React.createElement('div', null, React.createElement('label', { className: "text-[10px] font-black text-slate-400 px-2" }, "房間名稱"), React.createElement('input', { value: roomId, onChange: e => setRoomId(e.target.value), className: "w-full p-4 bg-slate-50 rounded-2xl font-black mt-1 outline-none" }))
+                        )
+                    )
+                ),
+
+                // Nav
+                React.createElement('nav', { className: "fixed bottom-8 left-1/2 -translate-x-1/2 bg-white p-2 rounded-full flex gap-1 shadow-2xl z-50 border border-slate-100" },
+                    [
+                        { id: 'calendar', icon: 'calendar', label: '記帳' },
+                        { id: 'stats', icon: 'pie-chart', label: '分析' },
+                        { id: 'settings', icon: 'settings', label: '設定' }
+                    ].map(t => React.createElement('button', {
+                        key: t.id, onClick: () => setActiveTab(t.id),
+                        className: `flex items-center gap-2 px-6 py-3 rounded-full transition-all ${activeTab === t.id ? 'active-tab shadow-lg' : 'inactive-tab'}`
+                    }, React.createElement('i', { 'data-lucide': t.icon, size: 18 }), activeTab === t.id && React.createElement('span', { className: "text-xs font-black" }, t.label)))
+                ),
+
+                // Modal
+                showAdd && React.createElement('div', { className: "fixed inset-0 z-[100] flex items-end justify-center p-4 animate-in fade-in" },
+                    React.createElement('div', { className: "absolute inset-0 bg-slate-900/60 backdrop-blur-sm", onClick: () => setShowAdd(false) }),
+                    React.createElement('form', { onSubmit: handleAdd, className: "relative bg-white w-full max-w-sm rounded-[3rem] p-8 shadow-2xl animate-up" },
+                        React.createElement('h3', { className: "font-black text-center mb-6" }, "新增支出"),
+                        React.createElement('input', { name: "amount", type: "number", placeholder: "0", autoFocus: true, className: "w-full text-5xl font-black text-center mb-6 outline-none" }),
+                        React.createElement('div', { className: "grid grid-cols-5 gap-2 mb-6" },
+                            roomData.categories.map(c => React.createElement('button', { key: c.id, type: "button", onClick: () => setSelCat(c.id), className: `aspect-square rounded-2xl flex items-center justify-center text-xl transition-all ${selCat === c.id ? 'bg-slate-900 text-white scale-110 shadow-lg' : 'bg-slate-50'}` }, c.icon))
+                        ),
+                        React.createElement('input', { name: "note", placeholder: "備註...", className: "w-full p-4 bg-slate-50 rounded-2xl font-black mb-6 outline-none" }),
+                        React.createElement('button', { type: "submit", className: "w-full py-5 bg-rose-500 text-white rounded-3xl font-black shadow-lg" }, "儲存")
+                    )
+                )
+            );
         }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(React.createElement(App));
+        setInterval(() => lucide.createIcons(), 500);
     </script>
 </body>
 </html>
