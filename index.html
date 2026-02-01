@@ -3,24 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>情侶雲端記帳本</title>
+    <title>情侶雲端同步記帳</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <!-- 圖表庫 -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <!-- Firebase -->
-    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-auth-compat.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
-        body { font-family: 'Noto Sans TC', sans-serif; background-color: #f8fafc; margin: 0; padding: 0; overflow-x: hidden; }
-        .active-tab { background-color: #0f172a !important; color: white !important; }
+        body { font-family: 'Noto Sans TC', sans-serif; background-color: #f8fafc; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+        .active-tab { background-color: #1e293b !important; color: white !important; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
-        .tab-transition { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
-        input { outline: none; }
+        .modal-up { animation: slideUp 0.3s ease-out; }
+        @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+        input { border: none; outline: none; background: transparent; }
     </style>
 </head>
 <body>
@@ -29,30 +28,34 @@
     <script type="text/babel">
         const { useState, useEffect, useMemo, useRef } = React;
 
-        // Firebase 初始化
+        // Firebase Configuration From Environment
         const firebaseConfig = JSON.parse(window.__firebase_config || '{}');
-        const hasFirebase = !!firebaseConfig.apiKey;
-        if (hasFirebase && !firebase.apps.length) firebase.initializeApp(firebaseConfig);
+        const appId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'stable-account-v1';
         
+        if (firebaseConfig.apiKey && !firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+
         const DEFAULT_CATS = [
-            { id: 'c1', name: '餐飲', icon: '🍲', color: '#fb7185' },
-            { id: 'c2', name: '交通', icon: '🚗', color: '#60a5fa' },
-            { id: 'c3', name: '居家', icon: '🏠', color: '#34d399' },
-            { id: 'c4', name: '購物', icon: '🛍️', color: '#fbbf24' }
+            { id: 'c1', name: '餐飲', icon: '🍲' },
+            { id: 'c2', name: '交通', icon: '🚗' },
+            { id: 'c3', name: '居家', icon: '🏠' },
+            { id: 'c4', name: '購物', icon: '🛍️' },
+            { id: 'c5', name: '娛樂', icon: '🎮' }
         ];
 
         function App() {
+            const params = new URLSearchParams(window.location.search);
+            const urlRoom = params.get('room');
+
             const [activeTab, setActiveTab] = useState('book');
-            const [roomName, setRoomName] = useState(localStorage.getItem('room') || '家');
-            const [userName, setUserName] = useState(localStorage.getItem('user') || '用戶A');
-            const [viewUser, setViewUser] = useState('all');
+            const [roomName, setRoomName] = useState(urlRoom || localStorage.getItem('room_id') || '我們的家');
+            const [userName, setUserName] = useState(localStorage.getItem('user_nick') || '用戶A');
+            const [viewUser, setViewUser] = useState('all'); 
+            const [user, setUser] = useState(null);
             
-            const [dbData, setDbData] = useState(() => {
-                const cached = localStorage.getItem(`cache_${roomName}`);
-                return cached ? JSON.parse(cached) : { transactions: [], categories: DEFAULT_CATS, recurring: [] };
-            });
-            
-            const [loading, setLoading] = useState(hasFirebase);
+            const [dbData, setDbData] = useState({ transactions: [], categories: DEFAULT_CATS, recurring: [] });
+            const [loading, setLoading] = useState(true);
             const [selectedDate, setSelectedDate] = useState(new Date());
             const [currentMonth, setCurrentMonth] = useState(new Date());
             const [showAdd, setShowAdd] = useState(false);
@@ -63,121 +66,152 @@
             const [selCatId, setSelCatId] = useState('c1');
             const [isIncome, setIsIncome] = useState(false);
             const [recForm, setRecForm] = useState({ name: '', amt: '', day: '1' });
+            const [newCat, setNewCat] = useState({ name: '', icon: '💰' });
 
             const dateStr = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-            // Sync with Firebase
+            // Rule 3: Auth First
             useEffect(() => {
-                if (!hasFirebase) { setLoading(false); return; }
-                let unsub;
-                const init = async () => {
+                const auth = firebase.auth();
+                const initAuth = async () => {
                     try {
-                        await firebase.auth().signInAnonymously();
-                        const db = firebase.firestore();
-                        const appId = window.__app_id || 'v1-ledger';
-                        const docRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('rooms').doc(roomName);
-                        
-                        unsub = docRef.onSnapshot(doc => {
-                            if (doc.exists) {
-                                const d = doc.data();
-                                const updated = {
-                                    transactions: d.transactions || [],
-                                    categories: d.categories || DEFAULT_CATS,
-                                    recurring: d.recurring || []
-                                };
-                                setDbData(updated);
-                                localStorage.setItem(`cache_${roomName}`, JSON.stringify(updated));
-                            } else {
-                                docRef.set({ transactions: [], categories: DEFAULT_CATS, recurring: [] });
-                            }
-                            setLoading(false);
-                        }, () => setLoading(false));
-                    } catch (e) { setLoading(false); }
+                        if (typeof window.__initial_auth_token !== 'undefined' && window.__initial_auth_token) {
+                            await auth.signInWithCustomToken(window.__initial_auth_token);
+                        } else {
+                            await auth.signInAnonymously();
+                        }
+                    } catch (e) {
+                        console.error("Auth Failure", e);
+                    }
                 };
-                init();
-                return () => unsub && unsub();
-            }, [roomName]);
+                initAuth();
+                const unsub = auth.onAuthStateChanged(u => {
+                    setUser(u);
+                    if (!firebaseConfig.apiKey) setLoading(false);
+                });
+                return () => unsub();
+            }, []);
 
-            const updateDB = async (payload) => {
-                const newData = { ...dbData, ...payload };
+            // Rule 1: Strict Paths for Firestore
+            useEffect(() => {
+                if (!user || !firebaseConfig.apiKey) return;
+                
+                const db = firebase.firestore();
+                // path: /artifacts/{appId}/public/data/rooms/{roomName}
+                const docRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('rooms').doc(roomName);
+                
+                const unsub = docRef.onSnapshot(doc => {
+                    if (doc.exists) {
+                        const data = doc.data();
+                        setDbData({
+                            transactions: data.transactions || [],
+                            categories: data.categories || DEFAULT_CATS,
+                            recurring: data.recurring || []
+                        });
+                    } else {
+                        // Initialize new room
+                        docRef.set({ transactions: [], categories: DEFAULT_CATS, recurring: [] });
+                    }
+                    setLoading(false);
+                }, (err) => {
+                    console.error("Sync Error:", err);
+                    setLoading(false);
+                });
+
+                localStorage.setItem('room_id', roomName);
+                return () => unsub();
+            }, [user, roomName]);
+
+            const updateCloud = async (newData) => {
                 setDbData(newData);
-                localStorage.setItem(`cache_${roomName}`, JSON.stringify(newData));
-                if (hasFirebase) {
+                if (user && firebaseConfig.apiKey) {
                     const db = firebase.firestore();
-                    const appId = window.__app_id || 'v1-ledger';
-                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('rooms').doc(roomName).update(payload);
+                    const docRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('rooms').doc(roomName);
+                    try {
+                        await docRef.set(newData, { merge: true });
+                    } catch (e) {
+                        console.error("Cloud Update Failure", e);
+                    }
                 }
             };
 
-            // Helpers
-            const users = useMemo(() => {
+            const allUsers = useMemo(() => {
                 const s = new Set(dbData.transactions.map(t => t.user));
                 s.add(userName);
                 return Array.from(s);
             }, [dbData.transactions, userName]);
 
-            const monthLogs = useMemo(() => {
-                const y = currentMonth.getFullYear(), m = currentMonth.getMonth();
-                return dbData.transactions.filter(t => {
-                    const d = new Date(t.date);
-                    return d.getFullYear() === y && d.getMonth() === m;
-                });
-            }, [dbData.transactions, currentMonth]);
-
-            const currentDayLogs = useMemo(() => {
-                const normal = dbData.transactions.filter(t => t.date === dateStr(selectedDate));
-                const recs = (dbData.recurring || []).filter(r => parseInt(r.day) === selectedDate.getDate());
-                const combined = [...normal, ...recs.map(r => ({ ...r, isRec: true }))];
+            const dailyLogs = useMemo(() => {
+                const logs = dbData.transactions.filter(t => t.date === dateStr(selectedDate));
+                const recs = dbData.recurring.filter(r => parseInt(r.day) === selectedDate.getDate());
+                const combined = [...logs, ...recs.map(r => ({ ...r, isRec: true }))];
                 return viewUser === 'all' ? combined : combined.filter(t => t.user === viewUser);
             }, [dbData, selectedDate, viewUser]);
 
-            // Chart Logic
             const chartRef = useRef(null);
             const chartInstance = useRef(null);
 
             useEffect(() => {
                 if (activeTab === 'chart' && chartRef.current) {
                     if (chartInstance.current) chartInstance.current.destroy();
+                    const y = currentMonth.getFullYear(), m = currentMonth.getMonth();
                     
-                    const filtered = viewUser === 'all' ? monthLogs : monthLogs.filter(t => t.user === viewUser);
-                    const expenses = filtered.filter(t => t.amount < 0);
-                    const catMap = {};
-                    expenses.forEach(e => {
-                        const cat = dbData.categories.find(c => c.id === e.catId)?.name || '其他';
-                        catMap[cat] = (catMap[cat] || 0) + Math.abs(e.amount);
+                    const mLogs = dbData.transactions.filter(t => {
+                        const d = new Date(t.date);
+                        return d.getFullYear() === y && d.getMonth() === m && (viewUser === 'all' || t.user === viewUser);
+                    }).filter(t => t.amount < 0);
+
+                    const groups = {};
+                    mLogs.forEach(t => {
+                        const c = dbData.categories.find(cat => cat.id === t.catId)?.name || '其他';
+                        groups[c] = (groups[c] || 0) + Math.abs(t.amount);
                     });
 
                     chartInstance.current = new Chart(chartRef.current, {
                         type: 'doughnut',
                         data: {
-                            labels: Object.keys(catMap),
-                            datasets: [{
-                                data: Object.values(catMap),
-                                backgroundColor: ['#fb7185', '#60a5fa', '#34d399', '#fbbf24', '#a78bfa', '#f472b6'],
-                                borderWidth: 0,
-                                hoverOffset: 10
+                            labels: Object.keys(groups),
+                            datasets: [{ 
+                                data: Object.values(groups), 
+                                backgroundColor: ['#f43f5e', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#06b6d4'], 
+                                borderWidth: 0 
                             }]
                         },
                         options: { 
-                            plugins: { legend: { position: 'bottom', labels: { usePointStyle: true, font: { weight: 'bold' } } } },
-                            cutout: '70%'
+                            plugins: { legend: { position: 'bottom', labels: { usePointStyle: true, font: { weight: 'bold', size: 12 } } } },
+                            cutout: '75%',
+                            maintainAspectRatio: false
                         }
                     });
                 }
-            }, [activeTab, monthLogs, viewUser]);
+            }, [activeTab, dbData, currentMonth, viewUser]);
+
+            const handleShare = () => {
+                const url = `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(roomName)}`;
+                const tempInput = document.createElement("input");
+                tempInput.value = url;
+                document.body.appendChild(tempInput);
+                tempInput.select();
+                document.execCommand("copy");
+                document.body.removeChild(tempInput);
+                alert("已複製專屬邀請連結！");
+            };
 
             return (
                 <div className="max-w-md mx-auto min-h-screen pb-32">
-                    {/* Sticky Header */}
-                    <header className="bg-white p-6 pt-10 rounded-b-[2.5rem] shadow-sm sticky top-0 z-40">
+                    {/* Header */}
+                    <header className="bg-white p-6 pt-12 rounded-b-[2.5rem] shadow-sm sticky top-0 z-40">
                         <div className="flex justify-between items-center mb-6 px-2">
-                            <h1 className="font-black text-slate-800 text-xl tracking-tighter">🏠 {roomName}</h1>
-                            <div className={`w-2 h-2 rounded-full ${loading ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`} />
+                            <div>
+                                <h1 className="font-black text-slate-900 text-2xl tracking-tighter">🏠 {roomName}</h1>
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Cloud Syncing Enabled</p>
+                            </div>
+                            <div className={`w-3 h-3 rounded-full ${loading ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`} />
                         </div>
-                        <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
-                            <button onClick={() => setViewUser('all')} className={`px-5 py-2.5 rounded-2xl text-[11px] font-black whitespace-nowrap tab-transition ${viewUser === 'all' ? 'bg-slate-900 text-white shadow-lg' : 'bg-slate-50 text-slate-400'}`}>全部明細</button>
-                            {users.map(u => (
-                                <button key={u} onClick={() => setViewUser(u)} className={`px-5 py-2.5 rounded-2xl text-[11px] font-black whitespace-nowrap tab-transition ${viewUser === u ? 'bg-rose-500 text-white shadow-lg shadow-rose-100' : 'bg-slate-50 text-slate-400'}`}>
+                        <div className="flex gap-2 overflow-x-auto no-scrollbar pb-2">
+                            <button onClick={() => setViewUser('all')} className={`px-6 py-3 rounded-2xl text-[11px] font-black whitespace-nowrap transition-all ${viewUser === 'all' ? 'bg-slate-900 text-white shadow-xl' : 'bg-slate-100 text-slate-400'}`}>全部明細</button>
+                            {allUsers.map(u => (
+                                <button key={u} onClick={() => setViewUser(u)} className={`px-6 py-3 rounded-2xl text-[11px] font-black whitespace-nowrap transition-all ${viewUser === u ? 'bg-rose-500 text-white shadow-xl' : 'bg-slate-100 text-slate-400'}`}>
                                     {u === userName ? '我' : u}
                                 </button>
                             ))}
@@ -187,50 +221,47 @@
                     <main className="p-4 space-y-6">
                         {activeTab === 'book' && (
                             <>
-                                {/* 日曆 */}
-                                <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-50">
-                                    <div className="flex justify-between items-center mb-6 px-2 font-black text-slate-800">
-                                        <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth()-1))}>‹</button>
-                                        <span className="tracking-widest text-sm">{currentMonth.getFullYear()} / {currentMonth.getMonth()+1}</span>
-                                        <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth()+1))}>›</button>
-                                    </div>
-                                    <div className="grid grid-cols-7 gap-1 text-[10px] text-slate-300 font-black text-center mb-2">
-                                        {['日','一','二','三','四','五','六'].map(d => <div key={d}>{d}</div>)}
+                                {/* Calendar Section */}
+                                <div className="bg-white p-6 rounded-[2.5rem] shadow-sm">
+                                    <div className="flex justify-between items-center mb-6 px-4 font-black text-slate-900">
+                                        <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth()-1))} className="p-2">‹</button>
+                                        <span className="text-sm tracking-widest">{currentMonth.getFullYear()} / {currentMonth.getMonth()+1}</span>
+                                        <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth()+1))} className="p-2">›</button>
                                     </div>
                                     <div className="grid grid-cols-7 gap-1">
-                                        {Array.from({ length: new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1).getDay() }).map((_, i) => <div key={`empty-${i}`} />)}
-                                        {Array.from({ length: new Date(currentMonth.getFullYear(), currentMonth.getMonth()+1, 0).getDate() }).map((_, i) => {
+                                        {Array.from({length: new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1).getDay()}).map((_,i)=><div key={i}/>)}
+                                        {Array.from({length: new Date(currentMonth.getFullYear(), currentMonth.getMonth()+1, 0).getDate()}).map((_,i)=>{
                                             const d = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), i+1);
                                             const isSel = dateStr(d) === dateStr(selectedDate);
                                             const hasTx = dbData.transactions.some(t => t.date === dateStr(d)) || dbData.recurring.some(r => parseInt(r.day) === d.getDate());
                                             return (
-                                                <button key={i} onClick={() => setSelectedDate(d)} className={`aspect-square rounded-2xl flex flex-col items-center justify-center text-xs font-black relative tab-transition ${isSel ? 'bg-slate-900 text-white shadow-xl scale-110 z-10' : 'text-slate-600'}`}>
+                                                <button key={i} onClick={() => setSelectedDate(d)} className={`aspect-square rounded-2xl flex flex-col items-center justify-center text-xs font-black relative transition-all ${isSel ? 'bg-slate-900 text-white shadow-2xl scale-110 z-10' : 'text-slate-600 hover:bg-slate-50'}`}>
                                                     {i+1}
-                                                    {hasTx && !isSel && <div className="absolute bottom-1.5 w-1 h-1 bg-rose-500 rounded-full" />}
+                                                    {hasTx && !isSel && <div className="absolute bottom-2 w-1 h-1 bg-rose-500 rounded-full" />}
                                                 </button>
                                             );
                                         })}
                                     </div>
                                 </div>
 
-                                {/* 明細列表 */}
-                                <div className="space-y-3">
+                                {/* List Section */}
+                                <div className="space-y-4">
                                     <div className="flex justify-between items-center px-4">
-                                        <h2 className="text-[10px] font-black text-slate-400 tracking-widest uppercase italic">{dateStr(selectedDate)}</h2>
-                                        <button onClick={() => setShowAdd(true)} className="bg-rose-500 text-white px-6 py-3.5 rounded-2xl text-xs font-black shadow-lg shadow-rose-100 active:scale-95 transition-all">＋ 記一筆</button>
+                                        <h2 className="text-[10px] font-black text-slate-400 tracking-[0.25em]">{dateStr(selectedDate)}</h2>
+                                        <button onClick={() => setShowAdd(true)} className="bg-rose-500 text-white px-8 py-4 rounded-2xl text-xs font-black shadow-lg shadow-rose-200 active:scale-95 transition-all">＋ 記一筆</button>
                                     </div>
-                                    {currentDayLogs.length === 0 ? (
-                                        <div className="py-20 text-center text-slate-300 font-bold text-xs uppercase tracking-widest">No Data</div>
+                                    {dailyLogs.length === 0 ? (
+                                        <div className="py-24 text-center text-slate-300 font-bold text-xs uppercase tracking-widest italic">這天沒有帳目喔</div>
                                     ) : (
-                                        currentDayLogs.map(t => (
-                                            <div key={t.id} className="bg-white p-5 rounded-[2rem] flex justify-between items-center shadow-sm border border-slate-50">
+                                        dailyLogs.map(t => (
+                                            <div key={t.id} className="bg-white p-5 rounded-[2.2rem] flex justify-between items-center shadow-sm border border-slate-50 hover:border-slate-200 transition-colors">
                                                 <div className="flex items-center gap-4">
-                                                    <div className="text-2xl w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center">
+                                                    <div className="text-2xl w-14 h-14 bg-slate-50 rounded-2xl flex items-center justify-center">
                                                         {t.isRec ? '🔄' : (dbData.categories.find(c => c.id === t.catId)?.icon || '💰')}
                                                     </div>
                                                     <div>
                                                         <p className="font-black text-slate-800 text-sm">{t.note || t.name}</p>
-                                                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">{t.user} {t.isRec && '| 固定收支'}</p>
+                                                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">{t.user} {t.isRec ? '| 固定收支' : ''}</p>
                                                     </div>
                                                 </div>
                                                 <div className="text-right">
@@ -238,7 +269,7 @@
                                                         {t.amount > 0 ? `+$${t.amount}` : `-$${Math.abs(t.amount)}`}
                                                     </p>
                                                     {!t.isRec && (
-                                                        <button onClick={() => updateDB({ transactions: dbData.transactions.filter(i => i.id !== t.id) })} className="text-[9px] text-rose-300 font-bold">刪除</button>
+                                                        <button onClick={() => updateCloud({...dbData, transactions: dbData.transactions.filter(i => i.id !== t.id)})} className="text-[10px] text-rose-300 font-bold px-2 py-1">刪除</button>
                                                     )}
                                                 </div>
                                             </div>
@@ -250,27 +281,27 @@
 
                         {activeTab === 'chart' && (
                             <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-500">
-                                <div className="bg-white p-8 rounded-[3rem] shadow-sm text-center">
-                                    <h3 className="font-black text-slate-400 text-[10px] uppercase tracking-[0.2em] mb-4">月度支出比例</h3>
-                                    <div className="relative inline-block w-full max-w-[240px]">
+                                <div className="bg-white p-10 rounded-[3rem] shadow-sm text-center relative overflow-hidden">
+                                    <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-rose-500 to-indigo-500" />
+                                    <h3 className="font-black text-slate-400 text-[10px] uppercase tracking-widest mb-8">支出比例分析</h3>
+                                    <div className="relative mx-auto w-full h-72">
                                         <canvas ref={chartRef}></canvas>
-                                        <div className="absolute inset-0 flex flex-col items-center justify-center -z-10">
-                                            <p className="text-[10px] font-black text-slate-300 uppercase">Total</p>
-                                            <p className="text-2xl font-black text-slate-800">
-                                                ${Math.abs(monthLogs.filter(t => t.amount < 0 && (viewUser === 'all' || t.user === viewUser)).reduce((a, b) => a + b.amount, 0))}
-                                            </p>
-                                        </div>
                                     </div>
                                 </div>
-
                                 <div className="grid grid-cols-2 gap-4">
-                                    <div className="bg-emerald-50 p-6 rounded-[2.5rem]">
-                                        <p className="text-[9px] font-black text-emerald-400 uppercase mb-1">本月總收入</p>
-                                        <p className="text-xl font-black text-emerald-600">${monthLogs.filter(t => t.amount > 0 && (viewUser === 'all' || t.user === viewUser)).reduce((a, b) => a + b.amount, 0)}</p>
+                                    <div className="bg-emerald-500 p-8 rounded-[2.5rem] text-white shadow-xl shadow-emerald-100">
+                                        <p className="text-[9px] font-bold uppercase opacity-80 mb-2">本月總收入</p>
+                                        <p className="text-3xl font-black">${dbData.transactions.filter(t => {
+                                            const d = new Date(t.date);
+                                            return d.getMonth() === currentMonth.getMonth() && t.amount > 0;
+                                        }).reduce((a,b)=>a+b.amount, 0)}</p>
                                     </div>
-                                    <div className="bg-rose-50 p-6 rounded-[2.5rem]">
-                                        <p className="text-[9px] font-black text-rose-400 uppercase mb-1">本月總支出</p>
-                                        <p className="text-xl font-black text-rose-600">${Math.abs(monthLogs.filter(t => t.amount < 0 && (viewUser === 'all' || t.user === viewUser)).reduce((a, b) => a + b.amount, 0))}</p>
+                                    <div className="bg-slate-900 p-8 rounded-[2.5rem] text-white shadow-xl shadow-slate-200">
+                                        <p className="text-[9px] font-bold uppercase opacity-80 mb-2">本月總支出</p>
+                                        <p className="text-3xl font-black">${Math.abs(dbData.transactions.filter(t => {
+                                            const d = new Date(t.date);
+                                            return d.getMonth() === currentMonth.getMonth() && t.amount < 0;
+                                        }).reduce((a,b)=>a+b.amount, 0))}</p>
                                     </div>
                                 </div>
                             </div>
@@ -278,107 +309,97 @@
 
                         {activeTab === 'settings' && (
                             <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-500">
-                                {/* 個人與同步 */}
                                 <div className="bg-white p-8 rounded-[3rem] shadow-sm space-y-6">
-                                    <h3 className="font-black text-slate-800">個人與同步設定</h3>
-                                    <div>
-                                        <label className="text-[10px] font-black text-slate-400 ml-2">我的名字</label>
-                                        <input value={userName} onChange={e => {setUserName(e.target.value); localStorage.setItem('user', e.target.value);}} className="w-full p-4 bg-slate-50 rounded-2xl font-bold mt-1" />
-                                    </div>
-                                    <div>
-                                        <label className="text-[10px] font-black text-slate-400 ml-2">房間名稱 (同步用)</label>
-                                        <input value={roomName} onChange={e => {setRoomName(e.target.value); localStorage.setItem('room', e.target.value);}} className="w-full p-4 bg-slate-50 rounded-2xl font-bold mt-1 border-2 border-rose-50" />
+                                    <h3 className="font-black text-slate-900 text-lg">房間設置</h3>
+                                    <button onClick={handleShare} className="w-full bg-indigo-600 text-white p-5 rounded-2xl font-black text-sm shadow-xl shadow-indigo-100 flex items-center justify-center gap-3">
+                                        <span>🔗</span> 分享此房間給伴侶
+                                    </button>
+                                    <div className="space-y-5 pt-4 border-t border-slate-50">
+                                        <div>
+                                            <label className="text-[10px] font-black text-slate-400 ml-2 uppercase tracking-widest">我的顯示暱稱</label>
+                                            <input value={userName} onChange={e=>{setUserName(e.target.value); localStorage.setItem('user_nick', e.target.value);}} className="w-full p-5 bg-slate-50 rounded-2xl font-bold mt-2 focus:bg-slate-100 transition-colors" />
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] font-black text-slate-400 ml-2 uppercase tracking-widest">房間 ID (同步關鍵字)</label>
+                                            <input value={roomName} onChange={e=>setRoomName(e.target.value)} className="w-full p-5 bg-rose-50 rounded-2xl font-bold mt-2 text-rose-600 border border-rose-100" />
+                                        </div>
                                     </div>
                                 </div>
 
-                                {/* 固定收支管理 */}
-                                <div className="bg-white p-8 rounded-[3rem] shadow-sm space-y-4">
-                                    <h3 className="font-black text-slate-800 underline decoration-rose-100 decoration-4">每月固定項目</h3>
-                                    <div className="grid grid-cols-2 gap-2">
-                                        <input value={recForm.name} onChange={e => setRecForm({...recForm, name: e.target.value})} placeholder="項目" className="p-4 bg-slate-50 rounded-2xl font-bold text-xs" />
-                                        <input type="number" value={recForm.amt} onChange={e => setRecForm({...recForm, amt: e.target.value})} placeholder="金額" className="p-4 bg-slate-50 rounded-2xl font-bold text-xs" />
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-[10px] font-black text-slate-400">每月幾號？</span>
-                                        <input type="number" min="1" max="31" value={recForm.day} onChange={e => setRecForm({...recForm, day: e.target.value})} className="w-16 p-4 bg-slate-50 rounded-2xl font-bold text-center" />
-                                        <button onClick={() => {
-                                            if(!recForm.name || !recForm.amt) return;
-                                            const newItem = { id: 'r'+Date.now(), name: recForm.name, amount: -Math.abs(recForm.amt), day: recForm.day, user: userName };
-                                            updateDB({ recurring: [...dbData.recurring, newItem] });
-                                            setRecForm({ name: '', amt: '', day: '1' });
-                                        }} className="flex-1 bg-slate-900 text-white p-4 rounded-2xl font-black text-xs">加入</button>
+                                <div className="bg-white p-8 rounded-[3rem] shadow-sm space-y-6">
+                                    <h3 className="font-black text-slate-900 text-lg">固定收支設定</h3>
+                                    <div className="space-y-3">
+                                        <div className="flex gap-2">
+                                            <input placeholder="項目的名稱" className="flex-1 p-5 bg-slate-50 rounded-2xl font-bold text-xs" value={recForm.name} onChange={e=>setRecForm({...recForm, name:e.target.value})} />
+                                            <input type="number" placeholder="金額" className="w-28 p-5 bg-slate-50 rounded-2xl font-bold text-xs" value={recForm.amt} onChange={e=>setRecForm({...recForm, amt:e.target.value})} />
+                                        </div>
+                                        <div className="flex gap-2 items-center">
+                                            <span className="text-[10px] font-black text-slate-400 pl-2">每月幾號扣款？</span>
+                                            <input type="number" min="1" max="31" value={recForm.day} onChange={e=>setRecForm({...recForm, day:e.target.value})} className="w-20 p-5 bg-slate-50 rounded-2xl font-bold text-center" />
+                                            <button onClick={()=>{
+                                                if(!recForm.name || !recForm.amt) return;
+                                                const nr = { id: 'r'+Date.now(), name: recForm.name, amount: -Math.abs(recForm.amt), day: recForm.day, user: userName };
+                                                updateCloud({...dbData, recurring: [...dbData.recurring, nr]});
+                                                setRecForm({name:'', amt:'', day:'1'});
+                                            }} className="flex-1 bg-slate-900 text-white p-5 rounded-2xl font-black text-xs">新增至列表</button>
+                                        </div>
                                     </div>
                                     <div className="space-y-2 pt-2">
                                         {dbData.recurring.map(r => (
-                                            <div key={r.id} className="flex justify-between items-center p-4 bg-slate-50 rounded-2xl text-[10px] font-bold">
-                                                <span>{r.name} ({r.day}號) | ${Math.abs(r.amount)}</span>
-                                                <button onClick={() => updateDB({ recurring: dbData.recurring.filter(i => i.id !== r.id) })} className="text-rose-400 font-black">移除</button>
+                                            <div key={r.id} className="flex justify-between items-center p-5 bg-slate-50 rounded-2xl text-[11px] font-black">
+                                                <span className="text-slate-700">{r.name} (每月 {r.day} 號) - ${Math.abs(r.amount)}</span>
+                                                <button onClick={()=>updateCloud({...dbData, recurring: dbData.recurring.filter(i=>i.id!==r.id)})} className="text-rose-400 px-2">移除</button>
                                             </div>
                                         ))}
                                     </div>
-                                </div>
-
-                                {/* 分類管理 */}
-                                <div className="bg-white p-8 rounded-[3rem] shadow-sm space-y-4">
-                                    <h3 className="font-black text-slate-800">自定義分類</h3>
-                                    <div className="grid grid-cols-2 gap-2">
-                                        {dbData.categories.map(c => (
-                                            <div key={c.id} className="flex justify-between p-3 bg-slate-50 rounded-xl text-xs font-bold items-center">
-                                                <span>{c.icon} {c.name}</span>
-                                                <button onClick={() => updateDB({ categories: dbData.categories.filter(i => i.id !== c.id) })} className="text-slate-300 text-lg">×</button>
-                                            </div>
-                                        ))}
-                                    </div>
-                                    <button onClick={() => {
-                                        const n = prompt("分類名稱？");
-                                        const i = prompt("Emoji？");
-                                        if(n && i) updateDB({ categories: [...dbData.categories, { id: 'c'+Date.now(), name: n, icon: i }] });
-                                    }} className="w-full py-4 border-2 border-dashed border-slate-100 rounded-2xl text-slate-300 font-bold text-xs">＋ 新增分類</button>
                                 </div>
                             </div>
                         )}
                     </main>
 
                     {/* Navbar */}
-                    <nav className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur-xl p-2 rounded-full flex gap-1 shadow-2xl z-50 border border-white">
-                        <button onClick={() => setActiveTab('book')} className={`flex items-center gap-2 px-7 py-4 rounded-full tab-transition ${activeTab === 'book' ? 'active-tab shadow-lg' : 'text-slate-300'}`}>
-                            <span className="text-lg">📅</span>
-                            {activeTab === 'book' && <span className="text-[11px] font-black">記帳</span>}
+                    <nav className="fixed bottom-10 left-1/2 -translate-x-1/2 bg-white/80 backdrop-blur-2xl p-2.5 rounded-[3rem] flex gap-2 shadow-2xl z-50 border border-white/50">
+                        <button onClick={() => setActiveTab('book')} className={`flex items-center gap-3 px-10 py-5 rounded-full transition-all ${activeTab === 'book' ? 'active-tab shadow-xl scale-105' : 'text-slate-300'}`}>
+                            <span className="text-xl">📅</span>
+                            {activeTab === 'book' && <span className="text-xs font-black">帳簿</span>}
                         </button>
-                        <button onClick={() => setActiveTab('chart')} className={`flex items-center gap-2 px-7 py-4 rounded-full tab-transition ${activeTab === 'chart' ? 'active-tab shadow-lg' : 'text-slate-300'}`}>
-                            <span className="text-lg">📊</span>
-                            {activeTab === 'chart' && <span className="text-[11px] font-black">報表</span>}
+                        <button onClick={() => setActiveTab('chart')} className={`flex items-center gap-3 px-10 py-5 rounded-full transition-all ${activeTab === 'chart' ? 'active-tab shadow-xl scale-105' : 'text-slate-300'}`}>
+                            <span className="text-xl">📊</span>
+                            {activeTab === 'chart' && <span className="text-xs font-black">分析</span>}
                         </button>
-                        <button onClick={() => setActiveTab('settings')} className={`flex items-center gap-2 px-7 py-4 rounded-full tab-transition ${activeTab === 'settings' ? 'active-tab shadow-lg' : 'text-slate-300'}`}>
-                            <span className="text-lg">⚙️</span>
-                            {activeTab === 'settings' && <span className="text-[11px] font-black">設定</span>}
+                        <button onClick={() => setActiveTab('settings')} className={`flex items-center gap-3 px-10 py-5 rounded-full transition-all ${activeTab === 'settings' ? 'active-tab shadow-xl scale-105' : 'text-slate-300'}`}>
+                            <span className="text-xl">⚙️</span>
+                            {activeTab === 'settings' && <span className="text-xs font-black">設定</span>}
                         </button>
                     </nav>
 
-                    {/* Add Modal */}
+                    {/* Transaction Modal */}
                     {showAdd && (
                         <div className="fixed inset-0 z-[100] flex items-end justify-center p-4">
-                            <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setShowAdd(false)} />
-                            <div className="relative bg-white w-full max-w-sm rounded-[3rem] p-8 shadow-2xl animate-in slide-in-from-bottom-full duration-300">
-                                <div className="flex justify-center mb-6">
+                            <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-md" onClick={() => setShowAdd(false)} />
+                            <div className="relative bg-white w-full max-w-sm rounded-[3.5rem] p-10 shadow-2xl modal-up">
+                                <div className="flex justify-center mb-10">
                                     <div className="bg-slate-100 p-1.5 rounded-2xl flex">
-                                        <button onClick={() => setIsIncome(false)} className={`px-8 py-2.5 rounded-xl text-xs font-black tab-transition ${!isIncome ? 'bg-white text-rose-500 shadow-sm' : 'text-slate-400'}`}>支出</button>
-                                        <button onClick={() => setIsIncome(true)} className={`px-8 py-2.5 rounded-xl text-xs font-black tab-transition ${isIncome ? 'bg-white text-emerald-500 shadow-sm' : 'text-slate-400'}`}>收入</button>
+                                        <button onClick={() => setIsIncome(false)} className={`px-10 py-3 rounded-xl text-xs font-black transition-all ${!isIncome ? 'bg-white text-rose-500 shadow-sm' : 'text-slate-400'}`}>支出</button>
+                                        <button onClick={() => setIsIncome(true)} className={`px-10 py-3 rounded-xl text-xs font-black transition-all ${isIncome ? 'bg-white text-emerald-500 shadow-sm' : 'text-slate-400'}`}>收入</button>
                                     </div>
                                 </div>
-                                <input type="number" autoFocus value={amt} onChange={e => setAmt(e.target.value)} placeholder="0" className="w-full text-6xl font-black text-center text-slate-800 mb-8 bg-transparent" />
-                                <div className="grid grid-cols-4 gap-3 mb-8 max-h-40 overflow-y-auto no-scrollbar">
+                                <div className="text-center mb-10">
+                                    <span className="text-2xl font-black text-slate-300 mr-2">$</span>
+                                    <input type="number" autoFocus value={amt} onChange={e => setAmt(e.target.value)} placeholder="0" className="text-7xl font-black text-slate-900 w-56 text-center" />
+                                </div>
+                                <div className="grid grid-cols-4 gap-4 mb-10 max-h-48 overflow-y-auto no-scrollbar">
                                     {dbData.categories.map(c => (
-                                        <button key={c.id} onClick={() => setSelCatId(c.id)} className={`aspect-square rounded-2xl text-2xl flex items-center justify-center tab-transition ${selCatId === c.id ? 'bg-slate-900 shadow-lg scale-110' : 'bg-slate-50'}`}>{c.icon}</button>
+                                        <button key={c.id} onClick={() => setSelCatId(c.id)} className={`aspect-square rounded-3xl text-3xl flex items-center justify-center transition-all ${selCatId === c.id ? 'bg-slate-900 shadow-2xl scale-110' : 'bg-slate-50'}`}>{c.icon}</button>
                                     ))}
                                 </div>
-                                <input value={note} onChange={e => setNote(e.target.value)} placeholder="備註..." className="w-full p-4 bg-slate-50 rounded-2xl font-bold mb-6" />
+                                <input value={note} onChange={e => setNote(e.target.value)} placeholder="寫點備註吧..." className="w-full p-6 bg-slate-50 rounded-3xl font-bold mb-8 text-sm focus:bg-slate-100 transition-colors" />
                                 <button onClick={() => {
                                     if(!amt) return;
-                                    const newTx = { id: 't'+Date.now(), amount: isIncome ? Math.abs(amt) : -Math.abs(amt), note: note || dbData.categories.find(c => c.id === selCatId)?.name, catId: selCatId, user: userName, date: dateStr(selectedDate) };
-                                    updateDB({ transactions: [...dbData.transactions, newTx] });
+                                    const nt = { id: 't'+Date.now(), amount: isIncome ? Math.abs(amt) : -Math.abs(amt), note: note || dbData.categories.find(c=>c.id===selCatId)?.name, catId: selCatId, user: userName, date: dateStr(selectedDate) };
+                                    updateCloud({...dbData, transactions: [...dbData.transactions, nt]});
                                     setAmt(''); setNote(''); setShowAdd(false);
-                                }} className="w-full py-6 bg-slate-900 text-white rounded-[2rem] font-black shadow-xl active:scale-95 transition-all">確認儲存</button>
+                                }} className="w-full py-7 bg-slate-900 text-white rounded-[2.5rem] font-black shadow-2xl active:scale-95 transition-all">儲存這筆帳目</button>
                             </div>
                         </div>
                     )}
@@ -391,4 +412,3 @@
     </script>
 </body>
 </html>
-
