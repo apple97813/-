@@ -1,253 +1,293 @@
-import React, { useState, useEffect } from 'react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, setDoc, onSnapshot, collection } from 'firebase/firestore';
-import { Plus, Settings, List, Receipt, Share2, Trash2, X } from 'lucide-react';
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>情侶同步記帳本</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore-compat.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
+        body { font-family: 'Noto Sans TC', sans-serif; -webkit-tap-highlight-color: transparent; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+    <div id="app" class="max-w-md mx-auto min-h-screen flex flex-col relative">
+        <!-- 初始加載畫面 -->
+        <div id="loading-screen" class="fixed inset-0 bg-white z-[100] flex flex-col items-center justify-center transition-opacity duration-500">
+            <div class="w-16 h-16 border-4 border-rose-100 border-t-rose-500 rounded-full animate-spin mb-4"></div>
+            <p class="text-slate-400 font-bold tracking-widest text-sm">正在同步雲端資料...</p>
+        </div>
 
-// --- 初始化配置 (Rule 1 & 3) ---
-const firebaseConfig = JSON.parse(__firebase_config);
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'stable-ledger';
+        <!-- 主內容區域 -->
+        <header class="bg-white px-6 pt-10 pb-6 rounded-b-[2.5rem] shadow-sm border-b border-slate-100 sticky top-0 z-30">
+            <div class="flex justify-between items-end">
+                <div>
+                    <span class="text-[10px] font-black bg-rose-100 text-rose-500 px-2 py-0.5 rounded-full mb-1 inline-block uppercase tracking-tighter">Room Sync</span>
+                    <h1 id="room-display" class="text-2xl font-black text-slate-800 tracking-tight">我的愛巢</h1>
+                </div>
+                <div class="text-right">
+                    <p class="text-[10px] font-black text-slate-300 uppercase">Current User</p>
+                    <p id="user-display" class="font-bold text-slate-600">使用者</p>
+                </div>
+            </div>
+        </header>
 
-const DEFAULT_CATS = [
-  { id: 'c1', name: '餐飲', icon: '🍎' },
-  { id: 'c2', name: '交通', icon: '🚲' },
-  { id: 'c3', name: '購物', icon: '🛒' },
-  { id: 'c4', name: '居家', icon: '🏠' },
-  { id: 'c5', name: '娛樂', icon: '✨' }
-];
+        <main id="main-content" class="flex-1 px-4 py-6 space-y-4 no-scrollbar pb-32">
+            <!-- 列表將動態插入此處 -->
+        </main>
 
-export default function App() {
-  const [user, setUser] = useState(null);
-  const [room, setRoom] = useState(localStorage.getItem('last_room') || '我的愛巢');
-  const [userNick, setUserNick] = useState(localStorage.getItem('user_nick') || '使用者');
-  const [activeTab, setActiveTab] = useState('list');
-  const [loading, setLoading] = useState(true);
-  const [data, setData] = useState({ transactions: [], categories: DEFAULT_CATS });
-  const [showModal, setShowModal] = useState(false);
+        <!-- 底部導覽 -->
+        <nav class="fixed bottom-8 left-0 right-0 px-6 flex justify-center z-40 safe-bottom">
+            <div class="bg-slate-900 shadow-2xl rounded-full p-2 flex items-center gap-1 border border-white/10">
+                <button onclick="switchTab('list')" id="tab-list" class="p-4 rounded-full transition-all bg-white text-slate-900 shadow-lg">
+                    <i data-lucide="list"></i>
+                </button>
+                <button onclick="openModal()" class="bg-rose-500 text-white p-4 rounded-full shadow-lg hover:scale-105 active:scale-95 transition-all mx-2">
+                    <i data-lucide="plus" style="stroke-width: 3px;"></i>
+                </button>
+                <button onclick="switchTab('settings')" id="tab-settings" class="p-4 rounded-full transition-all text-slate-400 hover:text-white">
+                    <i data-lucide="settings"></i>
+                </button>
+            </div>
+        </nav>
 
-  // 表單狀態
-  const [amount, setAmount] = useState('');
-  const [note, setNote] = useState('');
-  const [selectedCat, setSelectedCat] = useState('c1');
-  const [isIncome, setIsIncome] = useState(false);
+        <!-- 新增彈窗 -->
+        <div id="modal" class="fixed inset-0 z-50 hidden">
+            <div class="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onclick="closeModal()"></div>
+            <div class="absolute bottom-0 left-0 right-0 bg-white rounded-t-[3rem] p-8 shadow-2xl max-w-md mx-auto">
+                <div class="flex justify-between items-center mb-8">
+                    <div class="bg-slate-100 p-1 rounded-2xl flex">
+                        <button id="type-expense" onclick="setTxType(false)" class="px-6 py-2 rounded-xl text-xs font-black transition-all bg-white shadow-md text-rose-500">支出</button>
+                        <button id="type-income" onclick="setTxType(true)" class="px-6 py-2 rounded-xl text-xs font-black transition-all text-slate-400">收入</button>
+                    </div>
+                    <button onclick="closeModal()" class="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center text-slate-400"><i data-lucide="x"></i></button>
+                </div>
+                
+                <div class="mb-8">
+                    <span class="text-[11px] font-black text-slate-400 block text-center mb-1 uppercase tracking-widest">Amount</span>
+                    <input type="number" id="input-amount" placeholder="0" class="w-full text-6xl font-black text-center outline-none text-slate-800 bg-transparent" />
+                </div>
 
-  // 1. 處理身份驗證 (Rule 3)
-  useEffect(() => {
-    const initAuth = async () => {
-      try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
-        }
-      } catch (err) {
-        console.error("Auth failed:", err);
-      }
-    };
-    initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setUser);
-    return () => unsubscribe();
-  }, []);
+                <div class="grid grid-cols-5 gap-3 mb-8" id="category-grid">
+                    <!-- 分類動態生成 -->
+                </div>
 
-  // 2. 監聽 Firestore 資料 (Rule 1: 嚴格遵循路徑)
-  useEffect(() => {
-    if (!user) return; // 必須先有 User 才能查詢
-
-    localStorage.setItem('last_room', room);
-    localStorage.setItem('user_nick', userNick);
-
-    // 嚴格路徑：/artifacts/{appId}/public/data/{collectionName}
-    // 這裡我們把「房間」作為公用資料夾下的一個文件
-    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', room);
-
-    const unsubscribe = onSnapshot(
-      docRef,
-      (docSnap) => {
-        if (docSnap.exists()) {
-          setData(docSnap.data());
-        } else {
-          // 初始化房間資料
-          setDoc(docRef, { transactions: [], categories: DEFAULT_CATS });
-        }
-        setLoading(false);
-      },
-      (err) => {
-        console.error("Firestore Permission Error:", err);
-        setLoading(false);
-      }
-    );
-
-    return () => unsubscribe();
-  }, [user, room]);
-
-  const saveData = async (newData) => {
-    if (!user) return;
-    setData(newData);
-    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', room);
-    try {
-      await setDoc(docRef, newData);
-    } catch (err) {
-      console.error("Save failed:", err);
-    }
-  };
-
-  const handleAdd = () => {
-    if (!amount) return;
-    const newTx = {
-      id: Date.now(),
-      amount: isIncome ? Number(amount) : -Number(amount),
-      note: note || (DEFAULT_CATS.find(c => c.id === selectedCat)?.name),
-      catId: selectedCat,
-      user: userNick,
-      date: new Date().toISOString().split('T')[0]
-    };
-    saveData({ ...data, transactions: [newTx, ...data.transactions] });
-    setAmount(''); setNote(''); setShowModal(false);
-  };
-
-  const deleteTx = (id) => {
-    saveData({ ...data, transactions: data.transactions.filter(t => t.id !== id) });
-  };
-
-  if (loading) return (
-    <div className="flex h-screen items-center justify-center bg-slate-50 text-slate-400 font-bold">
-      正在取得連線權限...
+                <div class="space-y-4">
+                    <input id="input-note" placeholder="寫點備註吧..." class="w-full p-4 bg-slate-50 rounded-2xl font-bold text-sm outline-none border border-transparent focus:border-slate-200 transition-all" />
+                    <button onclick="saveTransaction()" class="w-full bg-slate-900 text-white py-5 rounded-[1.5rem] font-black text-lg active:scale-95 transition-all shadow-xl">完成記帳</button>
+                </div>
+            </div>
+        </div>
     </div>
-  );
 
-  return (
-    <div className="max-w-md mx-auto bg-slate-50 min-h-screen relative pb-28">
-      {/* Header */}
-      <div className="bg-white p-6 rounded-b-[2rem] shadow-sm mb-4 border-b border-slate-100">
-        <div className="flex justify-between items-end">
-          <div>
-            <span className="text-[10px] font-black bg-rose-100 text-rose-500 px-2 py-0.5 rounded-full mb-1 inline-block">ROOM</span>
-            <h1 className="text-2xl font-black text-slate-800 tracking-tight">{room}</h1>
-          </div>
-          <div className="text-right">
-            <p className="text-[10px] font-black text-slate-300 uppercase">Current User</p>
-            <p className="font-bold text-slate-600">{userNick}</p>
-          </div>
-        </div>
-      </div>
+    <script>
+        // --- 設定與初始化 ---
+        const DEFAULT_CATS = [
+            { id: 'c1', name: '餐飲', icon: '🍎' },
+            { id: 'c2', name: '交通', icon: '🚲' },
+            { id: 'c3', name: '購物', icon: '🛒' },
+            { id: 'c4', name: '居家', icon: '🏠' },
+            { id: 'c5', name: '娛樂', icon: '✨' }
+        ];
 
-      {/* Main Content */}
-      <div className="px-4 space-y-3">
-        {activeTab === 'list' && (
-          <>
-            {data.transactions.length === 0 ? (
-              <div className="py-20 text-center space-y-4">
-                <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto">
-                   <Receipt className="text-slate-300" size={32} />
-                </div>
-                <p className="text-slate-400 font-medium">還沒有任何記帳喔，點擊下方新增！</p>
-              </div>
-            ) : (
-              data.transactions.map(t => (
-                <div key={t.id} className="bg-white p-4 rounded-2xl flex justify-between items-center shadow-[0_2px_10px_-4px_rgba(0,0,0,0.1)] border border-slate-50">
-                  <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-2xl">
-                      {DEFAULT_CATS.find(c => c.id === t.catId)?.icon || '💰'}
-                    </div>
-                    <div>
-                      <p className="font-bold text-slate-800">{t.note}</p>
-                      <p className="text-[10px] text-slate-400 font-medium">{t.date} · {t.user}</p>
-                    </div>
-                  </div>
-                  <div className="text-right flex flex-col items-end">
-                    <p className={`font-black text-lg ${t.amount > 0 ? 'text-emerald-500' : 'text-slate-700'}`}>
-                      {t.amount > 0 ? `+$${t.amount}` : `-$${Math.abs(t.amount)}`}
-                    </p>
-                    <button onClick={() => deleteTx(t.id)} className="text-rose-200 hover:text-rose-400 transition-colors">
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
-          </>
-        )}
+        let state = {
+            user: null,
+            room: localStorage.getItem('sync_room') || '我的愛巢',
+            nick: localStorage.getItem('sync_nick') || '匿名伴侶',
+            activeTab: 'list',
+            isIncome: false,
+            selectedCat: 'c1',
+            data: { transactions: [] }
+        };
 
-        {activeTab === 'setting' && (
-          <div className="animate-in fade-in slide-in-from-bottom-4 duration-300 space-y-4">
-            <div className="bg-white p-6 rounded-[2rem] shadow-sm space-y-5 border border-slate-100">
-              <h2 className="font-black text-slate-800 flex items-center gap-2">
-                <Settings size={18} /> 同步設定
-              </h2>
-              <div className="space-y-4">
-                <div className="space-y-1.5">
-                  <label className="text-[11px] font-black text-slate-400 ml-1">個人暱稱</label>
-                  <input value={userNick} onChange={e => setUserNick(e.target.value)} className="w-full bg-slate-50 p-4 rounded-2xl font-bold outline-none focus:ring-2 ring-rose-500/10 transition-all" placeholder="輸入你的名字" />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-[11px] font-black text-slate-400 ml-1">房間 ID (與伴侶輸入相同名稱即可同步)</label>
-                  <input value={room} onChange={e => setRoom(e.target.value)} className="w-full bg-slate-50 p-4 rounded-2xl font-bold outline-none text-rose-500 focus:ring-2 ring-rose-500/10 transition-all" placeholder="輸入房間名稱" />
-                </div>
-              </div>
-            </div>
-            <div className="bg-rose-50 p-4 rounded-2xl border border-rose-100">
-              <p className="text-xs text-rose-600 font-bold leading-relaxed">
-                💡 提示：本應用程式會將資料同步至雲端。只要你與另一半使用相同的「房間 ID」，就能即時看到彼此的記帳資訊。
-              </p>
-            </div>
-          </div>
-        )}
-      </div>
+        let db, auth, appId;
 
-      {/* Floating Bottom Nav */}
-      <div className="fixed bottom-6 left-0 right-0 px-6 flex justify-center z-40">
-        <div className="bg-slate-900 shadow-2xl rounded-full p-2 flex items-center gap-1">
-          <button onClick={() => setActiveTab('list')} className={`p-4 rounded-full transition-all ${activeTab === 'list' ? 'bg-white text-slate-900 shadow-lg' : 'text-slate-400 hover:text-white'}`}>
-            <List size={20} />
-          </button>
-          <button onClick={() => setShowModal(true)} className="bg-rose-500 text-white p-4 rounded-full shadow-lg hover:scale-105 active:scale-95 transition-all mx-2">
-            <Plus size={24} strokeWidth={3} />
-          </button>
-          <button onClick={() => setActiveTab('setting')} className={`p-4 rounded-full transition-all ${activeTab === 'setting' ? 'bg-white text-slate-900 shadow-lg' : 'text-slate-400 hover:text-white'}`}>
-            <Settings size={20} />
-          </button>
-        </div>
-      </div>
+        // --- Firebase 核心邏輯 (Rule 1, 3) ---
+        async function initFirebase() {
+            try {
+                const config = JSON.parse(__firebase_config);
+                firebase.initializeApp(config);
+                db = firebase.firestore();
+                auth = firebase.auth();
+                appId = typeof __app_id !== 'undefined' ? __app_id : 'couple-ledger-v1';
 
-      {/* Add Modal */}
-      {showModal && (
-        <div className="fixed inset-0 z-50 flex items-end">
-          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setShowModal(false)} />
-          <div className="relative bg-white w-full rounded-t-[3rem] p-8 shadow-2xl animate-in slide-in-from-bottom duration-300 max-w-md mx-auto">
-            <div className="flex justify-between items-center mb-8">
-              <div className="bg-slate-100 p-1.5 rounded-2xl flex">
-                <button onClick={() => setIsIncome(false)} className={`px-6 py-2 rounded-xl text-xs font-black transition-all ${!isIncome ? 'bg-white shadow-md text-rose-500' : 'text-slate-400'}`}>支出</button>
-                <button onClick={() => setIsIncome(true)} className={`px-6 py-2 rounded-xl text-xs font-black transition-all ${isIncome ? 'bg-white shadow-md text-emerald-500' : 'text-slate-400'}`}>收入</button>
-              </div>
-              <button onClick={() => setShowModal(false)} className="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center text-slate-400"><X size={20} /></button>
-            </div>
+                // Rule 3: 先登入
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await auth.signInWithCustomToken(__initial_auth_token);
+                } else {
+                    await auth.signInAnonymously();
+                }
+
+                auth.onAuthStateChanged(user => {
+                    if (user) {
+                        state.user = user;
+                        startSync();
+                    }
+                });
+            } catch (err) {
+                console.error("Firebase Init Error:", err);
+                document.getElementById('loading-screen').innerHTML = `<p class='text-rose-500 p-4 text-center'>連線失敗，請確認網路或 API 設定</p>`;
+            }
+        }
+
+        function startSync() {
+            // Rule 1: 嚴格路徑
+            const docRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('rooms').doc(state.room);
             
-            <div className="mb-8">
-              <span className="text-[11px] font-black text-slate-400 block text-center mb-1 uppercase tracking-widest">Amount</span>
-              <input type="number" placeholder="0" value={amount} onChange={e => setAmount(e.target.value)} className="w-full text-6xl font-black text-center outline-none text-slate-800 bg-transparent" autoFocus />
-            </div>
+            docRef.onSnapshot(doc => {
+                if (doc.exists) {
+                    state.data = doc.data();
+                } else {
+                    docRef.set({ transactions: [] });
+                }
+                render();
+                document.getElementById('loading-screen').style.opacity = '0';
+                setTimeout(() => document.getElementById('loading-screen').style.display = 'none', 500);
+            }, err => {
+                console.error("Firestore Permission Denied:", err);
+            });
+        }
 
-            <div className="grid grid-cols-5 gap-3 mb-8">
-              {DEFAULT_CATS.map(c => (
-                <div key={c.id} className="flex flex-col items-center gap-1">
-                  <button onClick={() => setSelectedCat(c.id)} className={`w-full aspect-square rounded-2xl text-2xl flex items-center justify-center transition-all ${selectedCat === c.id ? 'bg-slate-900 shadow-xl scale-110' : 'bg-slate-50 hover:bg-slate-100'}`}>
-                    {c.icon}
-                  </button>
-                  <span className={`text-[10px] font-bold ${selectedCat === c.id ? 'text-slate-900' : 'text-slate-400'}`}>{c.name}</span>
+        // --- UI 操作 ---
+        function render() {
+            lucide.createIcons();
+            document.getElementById('room-display').innerText = state.room;
+            document.getElementById('user-display').innerText = state.nick;
+
+            const main = document.getElementById('main-content');
+            
+            if (state.activeTab === 'list') {
+                if (state.data.transactions.length === 0) {
+                    main.innerHTML = `
+                        <div class="py-20 text-center space-y-4">
+                            <div class="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto shadow-sm">
+                                <i data-lucide="receipt" class="text-slate-300"></i>
+                            </div>
+                            <p class="text-slate-400 font-medium">還沒有資料，點擊下方新增</p>
+                        </div>
+                    `;
+                } else {
+                    main.innerHTML = state.data.transactions.map(t => `
+                        <div class="bg-white p-4 rounded-2xl flex justify-between items-center shadow-sm border border-slate-100 animate-in fade-in duration-300">
+                            <div class="flex items-center gap-4">
+                                <div class="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-2xl">
+                                    ${DEFAULT_CATS.find(c => c.id === t.catId)?.icon || '💰'}
+                                </div>
+                                <div>
+                                    <p class="font-bold text-slate-800">${t.note}</p>
+                                    <p class="text-[10px] text-slate-400 font-medium">${t.date} · ${t.user}</p>
+                                </div>
+                            </div>
+                            <div class="text-right">
+                                <p class="font-black text-lg ${t.amount > 0 ? 'text-emerald-500' : 'text-slate-700'}">
+                                    ${t.amount > 0 ? '+' : ''}${t.amount}
+                                </p>
+                                <button onclick="deleteTx(${t.id})" class="text-rose-200 hover:text-rose-400"><i data-lucide="trash-2" size="14"></i></button>
+                            </div>
+                        </div>
+                    `).join('');
+                }
+            } else {
+                main.innerHTML = `
+                    <div class="bg-white p-6 rounded-[2rem] shadow-sm space-y-5 border border-slate-100 animate-in slide-in-from-bottom-4">
+                        <h2 class="font-black text-slate-800 flex items-center gap-2"><i data-lucide="settings" size="18"></i> 同步設定</h2>
+                        <div class="space-y-4">
+                            <div class="space-y-1.5">
+                                <label class="text-[11px] font-black text-slate-400 ml-1">個人暱稱</label>
+                                <input onchange="updateProfile('nick', this.value)" value="${state.nick}" class="w-full bg-slate-50 p-4 rounded-2xl font-bold outline-none" />
+                            </div>
+                            <div class="space-y-1.5">
+                                <label class="text-[11px] font-black text-slate-400 ml-1">房間 ID (與伴侶同步)</label>
+                                <input onchange="updateProfile('room', this.value)" value="${state.room}" class="w-full bg-slate-50 p-4 rounded-2xl font-bold outline-none text-rose-500" />
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+            lucide.createIcons();
+        }
+
+        function switchTab(tab) {
+            state.activeTab = tab;
+            document.getElementById('tab-list').className = tab === 'list' ? 'p-4 rounded-full transition-all bg-white text-slate-900 shadow-lg' : 'p-4 rounded-full transition-all text-slate-400 hover:text-white';
+            document.getElementById('tab-settings').className = tab === 'settings' ? 'p-4 rounded-full transition-all bg-white text-slate-900 shadow-lg' : 'p-4 rounded-full transition-all text-slate-400 hover:text-white';
+            render();
+        }
+
+        function updateProfile(key, val) {
+            state[key] = val;
+            localStorage.setItem(`sync_${key}`, val);
+            if (key === 'room') startSync();
+            render();
+        }
+
+        function openModal() {
+            document.getElementById('modal').classList.remove('hidden');
+            renderCategories();
+        }
+
+        function closeModal() {
+            document.getElementById('modal').classList.add('hidden');
+        }
+
+        function setTxType(isInc) {
+            state.isIncome = isInc;
+            document.getElementById('type-income').className = isInc ? 'px-6 py-2 rounded-xl text-xs font-black transition-all bg-white shadow-md text-emerald-500' : 'px-6 py-2 rounded-xl text-xs font-black transition-all text-slate-400';
+            document.getElementById('type-expense').className = !isInc ? 'px-6 py-2 rounded-xl text-xs font-black transition-all bg-white shadow-md text-rose-500' : 'px-6 py-2 rounded-xl text-xs font-black transition-all text-slate-400';
+        }
+
+        function renderCategories() {
+            const grid = document.getElementById('category-grid');
+            grid.innerHTML = DEFAULT_CATS.map(c => `
+                <div class="flex flex-col items-center gap-1">
+                    <button onclick="state.selectedCat='${c.id}';renderCategories()" class="w-full aspect-square rounded-2xl text-2xl flex items-center justify-center transition-all ${state.selectedCat === c.id ? 'bg-slate-900 shadow-xl scale-110 text-white' : 'bg-slate-50'}">
+                        ${c.icon}
+                    </button>
+                    <span class="text-[10px] font-bold ${state.selectedCat === c.id ? 'text-slate-900' : 'text-slate-400'}">${c.name}</span>
                 </div>
-              ))}
-            </div>
+            `).join('');
+        }
 
-            <div className="space-y-4">
-               <input placeholder="寫點備註吧..." value={note} onChange={e => setNote(e.target.value)} className="w-full p-4 bg-slate-50 rounded-2xl font-bold text-sm outline-none border border-transparent focus:border-slate-200 transition-all" />
-               <button onClick={handleAdd} className="w-full bg-slate-900 text-white py-5 rounded-[1.5rem] font-black text-lg active:scale-95 transition-all shadow-xl shadow-slate-200">完成記帳</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
+        async function saveTransaction() {
+            const amt = document.getElementById('input-amount').value;
+            const note = document.getElementById('input-note').value;
+            if (!amt) return;
+
+            const newTx = {
+                id: Date.now(),
+                amount: state.isIncome ? Number(amt) : -Number(amt),
+                note: note || DEFAULT_CATS.find(c => c.id === state.selectedCat).name,
+                catId: state.selectedCat,
+                user: state.nick,
+                date: new Date().toISOString().split('T')[0]
+            };
+
+            const docRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('rooms').doc(state.room);
+            await docRef.update({
+                transactions: [newTx, ...state.data.transactions]
+            });
+
+            document.getElementById('input-amount').value = '';
+            document.getElementById('input-note').value = '';
+            closeModal();
+        }
+
+        async function deleteTx(id) {
+            const docRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('rooms').doc(state.room);
+            await docRef.update({
+                transactions: state.data.transactions.filter(t => t.id !== id)
+            });
+        }
+
+        // 啟動
+        window.onload = initFirebase;
+    </script>
+</body>
+</html>
