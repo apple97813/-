@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>情侶同步記帳本</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -15,32 +15,36 @@
         body { font-family: 'Noto Sans TC', sans-serif; -webkit-tap-highlight-color: transparent; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+        input[type="number"]::-webkit-inner-spin-button, 
+        input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-900">
-    <div id="app" class="max-w-md mx-auto min-h-screen flex flex-col relative">
-        <!-- 初始加載畫面 -->
-        <div id="loading-screen" class="fixed inset-0 bg-white z-[100] flex flex-col items-center justify-center transition-opacity duration-500">
-            <div class="w-16 h-16 border-4 border-rose-100 border-t-rose-500 rounded-full animate-spin mb-4"></div>
-            <p class="text-slate-400 font-bold tracking-widest text-sm">正在同步雲端資料...</p>
+    <div id="app" class="max-w-md mx-auto min-h-screen flex flex-col relative overflow-hidden">
+        
+        <!-- 加載遮罩 -->
+        <div id="loading-screen" class="fixed inset-0 bg-white z-[100] flex flex-col items-center justify-center transition-opacity duration-300">
+            <div class="w-12 h-12 border-4 border-rose-100 border-t-rose-500 rounded-full animate-spin mb-4"></div>
+            <p id="loading-text" class="text-slate-400 font-bold text-sm tracking-widest">初始化系統中...</p>
         </div>
 
-        <!-- 主內容區域 -->
-        <header class="bg-white px-6 pt-10 pb-6 rounded-b-[2.5rem] shadow-sm border-b border-slate-100 sticky top-0 z-30">
+        <!-- 頂部資訊 -->
+        <header class="bg-white px-6 pt-12 pb-6 rounded-b-[2.5rem] shadow-sm border-b border-slate-100 sticky top-0 z-30">
             <div class="flex justify-between items-end">
                 <div>
-                    <span class="text-[10px] font-black bg-rose-100 text-rose-500 px-2 py-0.5 rounded-full mb-1 inline-block uppercase tracking-tighter">Room Sync</span>
+                    <span id="sync-indicator" class="text-[10px] font-black bg-slate-100 text-slate-400 px-2 py-0.5 rounded-full mb-1 inline-block uppercase tracking-tighter">OFFLINE</span>
                     <h1 id="room-display" class="text-2xl font-black text-slate-800 tracking-tight">我的愛巢</h1>
                 </div>
                 <div class="text-right">
-                    <p class="text-[10px] font-black text-slate-300 uppercase">Current User</p>
-                    <p id="user-display" class="font-bold text-slate-600">使用者</p>
+                    <p class="text-[10px] font-black text-slate-300 uppercase">User</p>
+                    <p id="user-display" class="font-bold text-slate-600">載入中...</p>
                 </div>
             </div>
         </header>
 
-        <main id="main-content" class="flex-1 px-4 py-6 space-y-4 no-scrollbar pb-32">
-            <!-- 列表將動態插入此處 -->
+        <!-- 主內容 -->
+        <main id="main-content" class="flex-1 px-4 py-6 space-y-4 no-scrollbar pb-32 overflow-y-auto">
+            <!-- 動態內容插入處 -->
         </main>
 
         <!-- 底部導覽 -->
@@ -58,7 +62,7 @@
             </div>
         </nav>
 
-        <!-- 新增彈窗 -->
+        <!-- 記帳 Modal -->
         <div id="modal" class="fixed inset-0 z-50 hidden">
             <div class="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onclick="closeModal()"></div>
             <div class="absolute bottom-0 left-0 right-0 bg-white rounded-t-[3rem] p-8 shadow-2xl max-w-md mx-auto">
@@ -67,17 +71,15 @@
                         <button id="type-expense" onclick="setTxType(false)" class="px-6 py-2 rounded-xl text-xs font-black transition-all bg-white shadow-md text-rose-500">支出</button>
                         <button id="type-income" onclick="setTxType(true)" class="px-6 py-2 rounded-xl text-xs font-black transition-all text-slate-400">收入</button>
                     </div>
-                    <button onclick="closeModal()" class="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center text-slate-400"><i data-lucide="x"></i></button>
+                    <button onclick="closeModal()" class="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center text-slate-400 hover:bg-rose-50 hover:text-rose-500"><i data-lucide="x"></i></button>
                 </div>
                 
                 <div class="mb-8">
-                    <span class="text-[11px] font-black text-slate-400 block text-center mb-1 uppercase tracking-widest">Amount</span>
-                    <input type="number" id="input-amount" placeholder="0" class="w-full text-6xl font-black text-center outline-none text-slate-800 bg-transparent" />
+                    <span class="text-[11px] font-black text-slate-400 block text-center mb-1 uppercase tracking-widest">金額</span>
+                    <input type="number" id="input-amount" placeholder="0" class="w-full text-6xl font-black text-center outline-none text-slate-800 bg-transparent" autofocus />
                 </div>
 
-                <div class="grid grid-cols-5 gap-3 mb-8" id="category-grid">
-                    <!-- 分類動態生成 -->
-                </div>
+                <div class="grid grid-cols-5 gap-3 mb-8" id="category-grid"></div>
 
                 <div class="space-y-4">
                     <input id="input-note" placeholder="寫點備註吧..." class="w-full p-4 bg-slate-50 rounded-2xl font-bold text-sm outline-none border border-transparent focus:border-slate-200 transition-all" />
@@ -88,7 +90,7 @@
     </div>
 
     <script>
-        // --- 設定與初始化 ---
+        // --- 設定 ---
         const DEFAULT_CATS = [
             { id: 'c1', name: '餐飲', icon: '🍎' },
             { id: 'c2', name: '交通', icon: '🚲' },
@@ -98,66 +100,86 @@
         ];
 
         let state = {
+            mode: 'local', // 'cloud' or 'local'
             user: null,
             room: localStorage.getItem('sync_room') || '我的愛巢',
-            nick: localStorage.getItem('sync_nick') || '匿名伴侶',
+            nick: localStorage.getItem('sync_nick') || '小寶貝',
             activeTab: 'list',
             isIncome: false,
             selectedCat: 'c1',
-            data: { transactions: [] }
+            data: JSON.parse(localStorage.getItem('local_data')) || { transactions: [] }
         };
 
         let db, auth, appId;
 
-        // --- Firebase 核心邏輯 (Rule 1, 3) ---
-        async function initFirebase() {
-            try {
-                const config = JSON.parse(__firebase_config);
-                firebase.initializeApp(config);
-                db = firebase.firestore();
-                auth = firebase.auth();
-                appId = typeof __app_id !== 'undefined' ? __app_id : 'couple-ledger-v1';
+        // --- 核心初始化 ---
+        async function init() {
+            lucide.createIcons();
+            
+            // 檢查是否在有 Firebase 配置的環境中
+            const hasConfig = typeof __firebase_config !== 'undefined' && __firebase_config;
+            
+            if (hasConfig) {
+                try {
+                    const config = JSON.parse(__firebase_config);
+                    firebase.initializeApp(config);
+                    db = firebase.firestore();
+                    auth = firebase.auth();
+                    appId = typeof __app_id !== 'undefined' ? __app_id : 'couple-ledger';
 
-                // Rule 3: 先登入
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await auth.signInWithCustomToken(__initial_auth_token);
-                } else {
-                    await auth.signInAnonymously();
-                }
-
-                auth.onAuthStateChanged(user => {
-                    if (user) {
-                        state.user = user;
-                        startSync();
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await auth.signInWithCustomToken(__initial_auth_token);
+                    } else {
+                        await auth.signInAnonymously();
                     }
-                });
-            } catch (err) {
-                console.error("Firebase Init Error:", err);
-                document.getElementById('loading-screen').innerHTML = `<p class='text-rose-500 p-4 text-center'>連線失敗，請確認網路或 API 設定</p>`;
+
+                    state.mode = 'cloud';
+                    document.getElementById('sync-indicator').innerText = 'Cloud Sync';
+                    document.getElementById('sync-indicator').classList.replace('text-slate-400', 'text-rose-500');
+                    document.getElementById('sync-indicator').classList.replace('bg-slate-100', 'bg-rose-100');
+                    
+                    startCloudSync();
+                } catch (e) {
+                    console.warn("Firebase 連線失敗，切換至本機模式:", e);
+                    switchToLocal();
+                }
+            } else {
+                switchToLocal();
             }
         }
 
-        function startSync() {
-            // Rule 1: 嚴格路徑
+        function switchToLocal() {
+            state.mode = 'local';
+            document.getElementById('sync-indicator').innerText = 'Local Mode';
+            hideLoading();
+            render();
+        }
+
+        function hideLoading() {
+            const loader = document.getElementById('loading-screen');
+            loader.style.opacity = '0';
+            setTimeout(() => loader.style.display = 'none', 300);
+        }
+
+        function startCloudSync() {
             const docRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('rooms').doc(state.room);
-            
             docRef.onSnapshot(doc => {
                 if (doc.exists) {
                     state.data = doc.data();
+                    localStorage.setItem('local_data', JSON.stringify(state.data));
                 } else {
                     docRef.set({ transactions: [] });
                 }
                 render();
-                document.getElementById('loading-screen').style.opacity = '0';
-                setTimeout(() => document.getElementById('loading-screen').style.display = 'none', 500);
+                hideLoading();
             }, err => {
-                console.error("Firestore Permission Denied:", err);
+                console.error("雲端讀取失敗:", err);
+                switchToLocal();
             });
         }
 
-        // --- UI 操作 ---
+        // --- UI 邏輯 ---
         function render() {
-            lucide.createIcons();
             document.getElementById('room-display').innerText = state.room;
             document.getElementById('user-display').innerText = state.nick;
 
@@ -168,46 +190,49 @@
                     main.innerHTML = `
                         <div class="py-20 text-center space-y-4">
                             <div class="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto shadow-sm">
-                                <i data-lucide="receipt" class="text-slate-300"></i>
+                                <i data-lucide="receipt" class="text-slate-200"></i>
                             </div>
-                            <p class="text-slate-400 font-medium">還沒有資料，點擊下方新增</p>
+                            <p class="text-slate-400 font-bold">目前還沒有帳單喔</p>
                         </div>
                     `;
                 } else {
                     main.innerHTML = state.data.transactions.map(t => `
-                        <div class="bg-white p-4 rounded-2xl flex justify-between items-center shadow-sm border border-slate-100 animate-in fade-in duration-300">
+                        <div class="bg-white p-4 rounded-3xl flex justify-between items-center shadow-sm border border-slate-50 animate-in fade-in slide-in-from-top-2 duration-300">
                             <div class="flex items-center gap-4">
                                 <div class="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-2xl">
                                     ${DEFAULT_CATS.find(c => c.id === t.catId)?.icon || '💰'}
                                 </div>
                                 <div>
-                                    <p class="font-bold text-slate-800">${t.note}</p>
-                                    <p class="text-[10px] text-slate-400 font-medium">${t.date} · ${t.user}</p>
+                                    <p class="font-black text-slate-800 text-sm">${t.note}</p>
+                                    <p class="text-[10px] text-slate-300 font-bold uppercase tracking-tight">${t.date} · ${t.user}</p>
                                 </div>
                             </div>
-                            <div class="text-right">
-                                <p class="font-black text-lg ${t.amount > 0 ? 'text-emerald-500' : 'text-slate-700'}">
-                                    ${t.amount > 0 ? '+' : ''}${t.amount}
+                            <div class="text-right flex flex-col items-end">
+                                <p class="font-black text-lg ${t.amount > 0 ? 'text-emerald-500' : 'text-slate-800'}">
+                                    ${t.amount > 0 ? '+' : ''}${t.amount.toLocaleString()}
                                 </p>
-                                <button onclick="deleteTx(${t.id})" class="text-rose-200 hover:text-rose-400"><i data-lucide="trash-2" size="14"></i></button>
+                                <button onclick="deleteTx(${t.id})" class="text-slate-200 hover:text-rose-400 transition-colors p-1"><i data-lucide="trash-2" size="12"></i></button>
                             </div>
                         </div>
                     `).join('');
                 }
             } else {
                 main.innerHTML = `
-                    <div class="bg-white p-6 rounded-[2rem] shadow-sm space-y-5 border border-slate-100 animate-in slide-in-from-bottom-4">
-                        <h2 class="font-black text-slate-800 flex items-center gap-2"><i data-lucide="settings" size="18"></i> 同步設定</h2>
+                    <div class="bg-white p-8 rounded-[2.5rem] shadow-sm space-y-6 border border-slate-50 animate-in slide-in-from-bottom-4">
+                        <h2 class="font-black text-slate-800 text-xl flex items-center gap-2"><i data-lucide="settings" class="text-rose-500"></i> 帳號與同步</h2>
                         <div class="space-y-4">
                             <div class="space-y-1.5">
-                                <label class="text-[11px] font-black text-slate-400 ml-1">個人暱稱</label>
-                                <input onchange="updateProfile('nick', this.value)" value="${state.nick}" class="w-full bg-slate-50 p-4 rounded-2xl font-bold outline-none" />
+                                <label class="text-[11px] font-black text-slate-400 ml-1 uppercase">你的暱稱</label>
+                                <input onchange="updateProfile('nick', this.value)" value="${state.nick}" class="w-full bg-slate-50 p-4 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-rose-100 transition-all" />
                             </div>
                             <div class="space-y-1.5">
-                                <label class="text-[11px] font-black text-slate-400 ml-1">房間 ID (與伴侶同步)</label>
-                                <input onchange="updateProfile('room', this.value)" value="${state.room}" class="w-full bg-slate-50 p-4 rounded-2xl font-bold outline-none text-rose-500" />
+                                <label class="text-[11px] font-black text-slate-400 ml-1 uppercase">房間 ID (與伴侶共享此 ID)</label>
+                                <input onchange="updateProfile('room', this.value)" value="${state.room}" class="w-full bg-slate-50 p-4 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-rose-100 text-rose-500 transition-all" />
                             </div>
                         </div>
+                        <p class="text-[10px] text-slate-400 leading-relaxed font-medium">
+                            * 提示：將「房間 ID」設定成一樣的文字，就能與伴侶同步資料。目前狀態：${state.mode === 'cloud' ? '🟢 雲端同步中' : '🟡 本機保存中'}
+                        </p>
                     </div>
                 `;
             }
@@ -222,15 +247,24 @@
         }
 
         function updateProfile(key, val) {
+            if (!val.trim()) return;
             state[key] = val;
             localStorage.setItem(`sync_${key}`, val);
-            if (key === 'room') startSync();
+            if (key === 'room' && state.mode === 'cloud') {
+                document.getElementById('loading-screen').style.display = 'flex';
+                document.getElementById('loading-screen').style.opacity = '1';
+                startCloudSync();
+            }
             render();
         }
 
         function openModal() {
             document.getElementById('modal').classList.remove('hidden');
+            state.isIncome = false;
+            state.selectedCat = 'c1';
+            setTxType(false);
             renderCategories();
+            document.getElementById('input-amount').focus();
         }
 
         function closeModal() {
@@ -247,10 +281,10 @@
             const grid = document.getElementById('category-grid');
             grid.innerHTML = DEFAULT_CATS.map(c => `
                 <div class="flex flex-col items-center gap-1">
-                    <button onclick="state.selectedCat='${c.id}';renderCategories()" class="w-full aspect-square rounded-2xl text-2xl flex items-center justify-center transition-all ${state.selectedCat === c.id ? 'bg-slate-900 shadow-xl scale-110 text-white' : 'bg-slate-50'}">
+                    <button onclick="state.selectedCat='${c.id}';renderCategories()" class="w-full aspect-square rounded-2xl text-2xl flex items-center justify-center transition-all ${state.selectedCat === c.id ? 'bg-slate-900 shadow-xl scale-110 text-white' : 'bg-slate-50 hover:bg-slate-100'}">
                         ${c.icon}
                     </button>
-                    <span class="text-[10px] font-bold ${state.selectedCat === c.id ? 'text-slate-900' : 'text-slate-400'}">${c.name}</span>
+                    <span class="text-[10px] font-black ${state.selectedCat === c.id ? 'text-slate-900' : 'text-slate-400'}">${c.name}</span>
                 </div>
             `).join('');
         }
@@ -258,7 +292,7 @@
         async function saveTransaction() {
             const amt = document.getElementById('input-amount').value;
             const note = document.getElementById('input-note').value;
-            if (!amt) return;
+            if (!amt || amt <= 0) return;
 
             const newTx = {
                 id: Date.now(),
@@ -266,13 +300,18 @@
                 note: note || DEFAULT_CATS.find(c => c.id === state.selectedCat).name,
                 catId: state.selectedCat,
                 user: state.nick,
-                date: new Date().toISOString().split('T')[0]
+                date: new Date().toLocaleDateString('zh-TW')
             };
 
-            const docRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('rooms').doc(state.room);
-            await docRef.update({
-                transactions: [newTx, ...state.data.transactions]
-            });
+            state.data.transactions = [newTx, ...state.data.transactions];
+            
+            if (state.mode === 'cloud') {
+                const docRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('rooms').doc(state.room);
+                await docRef.set(state.data);
+            } else {
+                localStorage.setItem('local_data', JSON.stringify(state.data));
+                render();
+            }
 
             document.getElementById('input-amount').value = '';
             document.getElementById('input-note').value = '';
@@ -280,14 +319,18 @@
         }
 
         async function deleteTx(id) {
-            const docRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('rooms').doc(state.room);
-            await docRef.update({
-                transactions: state.data.transactions.filter(t => t.id !== id)
-            });
+            state.data.transactions = state.data.transactions.filter(t => t.id !== id);
+            
+            if (state.mode === 'cloud') {
+                const docRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('rooms').doc(state.room);
+                await docRef.set(state.data);
+            } else {
+                localStorage.setItem('local_data', JSON.stringify(state.data));
+                render();
+            }
         }
 
-        // 啟動
-        window.onload = initFirebase;
+        window.onload = init;
     </script>
 </body>
 </html>
